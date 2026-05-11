@@ -16,7 +16,7 @@ from bidi.algorithm import get_display
 from ai import classify_news, TEMPLATES
 from dotenv import load_dotenv
 from db import get_conn
-
+from cloud_storage import upload_image
 
 # =========================
 # LOAD ENV
@@ -35,9 +35,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
-OUTPUT_FOLDER = "generated"
+# OUTPUT_FOLDER = "generated"
 
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+# os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+
 
 # =========================
 # DATABASE
@@ -101,7 +103,7 @@ def save_news(news):
                 continue
 
             news_id = result[0]
-
+            filename = f"news_{news_id}.png"
             print("\n🟢 NEW ARTICLE")
             print(f"TITLE: {item['title']}")
 
@@ -231,12 +233,11 @@ def clean_text(text):
     return unicodedata.normalize("NFKC", str(text or ""))
 
 
-def send_photo(image_path, title, url, category, confidence, content):
+def send_photo(photo_file, title, url, category, confidence, content):
 
     api_url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
 
     title = clean_text(title)
-
     content = clean_text(content or "")
 
     short_content = (
@@ -246,7 +247,6 @@ def send_photo(image_path, title, url, category, confidence, content):
     )
 
     caption = f"""
-
 📂 التصنيف: {category}
 🎯 الثقة: {round(confidence * 100, 1)}%
 
@@ -272,29 +272,43 @@ def send_photo(image_path, title, url, category, confidence, content):
         ]
     }
 
+    file_to_close = None
+
     try:
 
-        with open(image_path, "rb") as photo:
+        # =====================
+        # HANDLE PATH OR BUFFER
+        # =====================
 
-            requests.post(
-                api_url,
-                data={
-                    "chat_id": CHAT_ID,
-                    "caption": caption,
-                    "reply_markup": json.dumps(keyboard),
-                    "parse_mode": "HTML"
-                },
-                files={
-                    "photo": photo
-                },
-                timeout=30
-            )
+        if isinstance(photo_file, str):
+            file_to_send = open(photo_file, "rb")
+            file_to_close = file_to_send
+        else:
+            file_to_send = photo_file
+            file_to_send.seek(0)
+
+        requests.post(
+            api_url,
+            data={
+                "chat_id": CHAT_ID,
+                "caption": caption,
+                "reply_markup": json.dumps(keyboard),
+                "parse_mode": "HTML"
+            },
+            files={
+                "photo": file_to_send
+            },
+            timeout=30
+        )
 
         print("✅ SENT TO TELEGRAM")
 
     except Exception as e:
-
         print("❌ TELEGRAM ERROR:", e)
+
+    finally:
+        if file_to_close:
+            file_to_close.close()
         
 
 def get_html():
@@ -545,20 +559,14 @@ def generate_post_image(
         config = TEMPLATE_CONFIG.get(category)
 
         if config is None:
-
-            print(
-                f"⚠️ Unknown category: {category} → fallback to عام"
-            )
-
+            print(f"⚠️ Unknown category: {category} → fallback to عام")
             config = TEMPLATE_CONFIG["عام"]
 
         image_x1, image_y1, image_x2, image_y2 = config["image_box"]
-
         text_x1, text_y1, text_x2, text_y2 = config["text_box"]
 
         TEXT_BOX_X = text_x1
         TEXT_BOX_Y = text_y1
-
         TEXT_BOX_WIDTH = text_x2 - text_x1
         TEXT_BOX_HEIGHT = text_y2 - text_y1
 
@@ -569,14 +577,10 @@ def generate_post_image(
         template_path = config.get("template")
 
         if not os.path.exists(template_path):
-
             print(f"❌ TEMPLATE NOT FOUND: {template_path}")
-
             return
 
-        template = Image.open(
-            template_path
-        ).convert("RGBA")
+        template = Image.open(template_path).convert("RGBA")
 
         # =====================
         # DOWNLOAD IMAGE
@@ -585,14 +589,8 @@ def generate_post_image(
         news_img = None
 
         if image_url:
-
             try:
-
-                response = session.get(
-                    image_url,
-                    timeout=20
-                )
-
+                response = session.get(image_url, timeout=20)
                 response.raise_for_status()
 
                 news_img = Image.open(
@@ -600,11 +598,8 @@ def generate_post_image(
                 ).convert("RGBA")
 
             except Exception as e:
-
                 print("❌ IMAGE DOWNLOAD ERROR:", e)
-
                 news_img = None
-                
 
         # =====================
         # PROCESS IMAGE
@@ -612,10 +607,7 @@ def generate_post_image(
 
         if news_img:
 
-            img_ratio = (
-                news_img.width /
-                news_img.height
-            )
+            img_ratio = news_img.width / news_img.height
 
             target_ratio = (
                 (image_x2 - image_x1) /
@@ -623,52 +615,28 @@ def generate_post_image(
             )
 
             if img_ratio > target_ratio:
+                new_width = int(news_img.height * target_ratio)
 
-                new_width = int(
-                    news_img.height *
-                    target_ratio
-                )
+                left = (news_img.width - new_width) // 2
 
-                left = (
-                    news_img.width -
-                    new_width
-                ) // 2
-
-                news_img = news_img.crop(
-                    (
-                        left,
-                        0,
-                        left + new_width,
-                        news_img.height
-                    )
-                )
-
+                news_img = news_img.crop((
+                    left, 0,
+                    left + new_width,
+                    news_img.height
+                ))
             else:
+                new_height = int(news_img.width / target_ratio)
 
-                new_height = int(
-                    news_img.width /
-                    target_ratio
-                )
+                top = (news_img.height - new_height) // 2
 
-                top = (
-                    news_img.height -
-                    new_height
-                ) // 2
-
-                news_img = news_img.crop(
-                    (
-                        0,
-                        top,
-                        news_img.width,
-                        top + new_height
-                    )
-                )
+                news_img = news_img.crop((
+                    0, top,
+                    news_img.width,
+                    top + new_height
+                ))
 
             news_img = news_img.resize(
-                (
-                    image_x2 - image_x1,
-                    image_y2 - image_y1
-                ),
+                (image_x2 - image_x1, image_y2 - image_y1),
                 Image.LANCZOS
             )
 
@@ -676,46 +644,24 @@ def generate_post_image(
         # LAYER SYSTEM
         # =====================
 
-        base = Image.new(
-            "RGBA",
-            template.size,
-            (0, 0, 0, 0)
-        )
-
+        base = Image.new("RGBA", template.size, (0, 0, 0, 0))
         base.paste(template, (0, 0))
 
-        # default + social → image on top
         if category in ["عام", "اجتماعية"]:
 
             if news_img:
-
-                base.paste(
-                    news_img,
-                    (image_x1, image_y1),
-                    news_img
-                )
+                base.paste(news_img, (image_x1, image_y1), news_img)
 
             final_img = base
 
         else:
 
-            background = Image.new(
-                "RGBA",
-                template.size,
-                (0, 0, 0, 255)
-            )
+            background = Image.new("RGBA", template.size, (0, 0, 0, 255))
 
             if news_img:
+                background.paste(news_img, (image_x1, image_y1))
 
-                background.paste(
-                    news_img,
-                    (image_x1, image_y1)
-                )
-
-            final_img = Image.alpha_composite(
-                background,
-                template
-            )
+            final_img = Image.alpha_composite(background, template)
 
         # =====================
         # TEXT DRAWING
@@ -723,9 +669,7 @@ def generate_post_image(
 
         draw = ImageDraw.Draw(final_img)
 
-        title = clean_text(title)
-
-        title = prepare_ar_text(title)
+        title = prepare_ar_text(clean_text(title))
 
         font, lines, line_height = fit_text(
             draw,
@@ -741,10 +685,7 @@ def generate_post_image(
 
         lines.reverse()
 
-        total_text_height = (
-            len(lines) *
-            line_height
-        )
+        total_text_height = len(lines) * line_height
 
         y = TEXT_BOX_Y + (
             (TEXT_BOX_HEIGHT - total_text_height) // 2
@@ -752,27 +693,15 @@ def generate_post_image(
 
         for line in lines:
 
-            bbox = draw.textbbox(
-                (0, 0),
-                line,
-                font=font
-            )
-
+            bbox = draw.textbbox((0, 0), line, font=font)
             width = bbox[2] - bbox[0]
 
             x = TEXT_BOX_X + (
                 (TEXT_BOX_WIDTH - width) // 2
             )
 
-            # shadow
-            draw.text(
-                (x + 2, y + 2),
-                line,
-                font=font,
-                fill=(0, 0, 0)
-            )
+            draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0))
 
-            # main text
             draw.text(
                 (x, y),
                 line,
@@ -785,21 +714,24 @@ def generate_post_image(
             y += line_height
 
         # =====================
-        # SAVE
+        # CLOUD UPLOAD (BACKUP)
         # =====================
 
-        output_path = os.path.join(
-            OUTPUT_FOLDER,
-            f"news_{news_id}.png"
-        )
+        filename = f"news_{news_id}.png"
+        upload_image(final_img, filename)
 
-        final_img.save(
-            output_path,
-            quality=100
-        )
+        # =====================
+        # TELEGRAM SEND (FROM MEMORY)
+        # =====================
+
+        import io
+
+        buffer = io.BytesIO()
+        final_img.save(buffer, format="PNG")
+        buffer.seek(0)
 
         send_photo(
-            output_path,
+            buffer,
             None,
             url,
             category,
@@ -807,14 +739,10 @@ def generate_post_image(
             content
         )
 
-        print(f"🖼️ IMAGE SAVED: {output_path}")
+        print("🖼️ IMAGE GENERATED + SENT")
 
     except Exception as e:
-
-        
-
         print(f"❌ IMAGE ERROR: {e}")
-
 
 # =========================
 # EXTRACT NEWS
