@@ -2,11 +2,13 @@ import json
 import re
 import pandas as pd
 import joblib
-import sqlite3 as db_module
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
+
+from db import get_conn
 
 # =========================
 # ARABIC STOPWORDS
@@ -35,51 +37,68 @@ def normalize_arabic(text):
     return text.strip()
 
 # =========================
-# LOAD FROM DATABASE
+# LOAD FROM DATABASE (POSTGRES)
 # =========================
 
-def load_from_database(db_path="news.db", min_confidence=0.50):
-    try:
-        conn_db = db_module.connect(db_path)
-        cur = conn_db.cursor()
+def load_from_database(min_confidence=0.50):
 
-        
+    try:
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # =====================
+        # NEWS TABLE
+        # =====================
+
         cur.execute("""
-            SELECT title, category, confidence FROM news
-            WHERE confidence >= ?
+            SELECT title, category, confidence
+            FROM news
+            WHERE confidence >= %s
             AND category != 'عام'
             AND title IS NOT NULL
         """, (min_confidence,))
+
         news_rows = cur.fetchall()
 
-        
-        try:
-            cur.execute("""
-                SELECT title, category, confidence
-                FROM confirmed_training
-                WHERE title IS NOT NULL
-            """)
-            confirmed_rows = cur.fetchall()
-        except Exception:
-            confirmed_rows = []
+        # =====================
+        # CONFIRMED TRAINING
+        # =====================
 
-        conn_db.close()
+        cur.execute("""
+            SELECT title, category, confidence
+            FROM confirmed_training
+            WHERE title IS NOT NULL
+        """)
+
+        confirmed_rows = cur.fetchall()
+
+        conn.close()
+
+        # =====================
+        # MERGE DATA
+        # =====================
 
         db_data = []
         seen = set()
 
-        # The confirmed one first in case there are duplicates, so it takes from them
         for title, category, confidence in confirmed_rows + news_rows:
+
             if title and category and title not in seen:
+
                 seen.add(title)
+
                 db_data.append((title.strip(), category))
 
         print(f"  - From news table: {len(news_rows)}")
         print(f"  - From confirmed table: {len(confirmed_rows)}")
+
         return db_data
 
     except Exception as e:
+
         print(f"⚠️ Could not load from database: {e}")
+
         return []
 
 # =========================
@@ -91,10 +110,12 @@ with open("dataset.json", "r", encoding="utf-8") as f:
 
 print(f"📁 Base dataset: {len(data)} examples")
 
-db_data = load_from_database(db_path="news.db", min_confidence=0.50)
-print(f"🗄️  Database data: {len(db_data)} examples")
+db_data = load_from_database(min_confidence=0.50)
+
+print(f"🗄️ Database data: {len(db_data)} examples")
 
 all_data = data + db_data
+
 print(f"📊 Total combined: {len(all_data)} examples")
 
 df = pd.DataFrame(all_data, columns=["text", "label"])
@@ -108,6 +129,7 @@ df["text"] = df["text"].apply(normalize_arabic)
 print("\n=========================")
 print("DATASET INFO")
 print("=========================")
+
 print("DATASET SIZE:", len(df))
 print("\nLABEL COUNTS:\n")
 print(df["label"].value_counts())
@@ -180,38 +202,14 @@ print("MODEL ACCURACY")
 print("=========================")
 print(f"\nAccuracy: {accuracy:.2f}")
 
-print("\n=========================")
-print("TRAIN / TEST SCORE")
-print("=========================")
-print("TRAIN SCORE:", model.score(X_train, y_train))
+print("\nTRAIN SCORE:", model.score(X_train, y_train))
 print("TEST SCORE :", model.score(X_test, y_test))
 
 print("\n=========================")
 print("CLASSIFICATION REPORT")
 print("=========================\n")
+
 print(classification_report(y_test, predictions))
-
-# =========================
-# WRONG PREDICTIONS
-# =========================
-
-print("\n=========================")
-print("WRONG PREDICTIONS")
-print("=========================\n")
-
-wrong_count = 0
-
-for text, real, pred in zip(X_test_text, y_test, predictions):
-    if real != pred:
-        wrong_count += 1
-        print(f"❌ WRONG #{wrong_count}")
-        print("TEXT      :", text)
-        print("REAL      :", real)
-        print("PREDICTED :", pred)
-        print("-" * 60)
-
-if wrong_count == 0:
-    print("✅ NO WRONG PREDICTIONS")
 
 # =========================
 # SAVE MODEL
@@ -223,6 +221,5 @@ joblib.dump(vectorizer, "vectorizer.pkl")
 print("\n=========================")
 print("MODEL SAVED")
 print("=========================")
-print("\n✅ model.pkl")
-print("✅ vectorizer.pkl")
+
 print("\n🚀 TRAINING COMPLETED SUCCESSFULLY")

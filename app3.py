@@ -3,25 +3,148 @@ import json
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-import sqlite3
 import time
 import re
 import os
+import unicodedata
+from db import db_execute
+from io import BytesIO
 from PIL import ImageFilter
 from PIL import Image, ImageDraw, ImageFont
-from io import BytesIO
-import unicodedata
 import arabic_reshaper
 from bidi.algorithm import get_display
 from ai import classify_news, TEMPLATES
 from dotenv import load_dotenv
+from db import get_conn
 
+
+# =========================
+# LOAD ENV
+# =========================
 
 load_dotenv()
 
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+
+# =========================
+# PATHS
+# =========================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
+OUTPUT_FOLDER = "generated"
+
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+# =========================
+# DATABASE
+# =========================
+
+def save_news(news):
+
+    for item in news:
+
+        try:
+
+            category, confidence = classify_news(
+                item["title"],
+                content=item.get("content")
+            )
+
+            # =====================
+            # HANDLE UNKNOWN
+            # =====================
+
+            if category is None:
+                print("⚠️ LOW CONFIDENCE NEWS:", item["title"])
+                category = "عام"
+                confidence = 0.0
+
+            # =====================
+            # VALIDATE CATEGORY
+            # =====================
+
+            if category not in TEMPLATE_CONFIG:
+                category = "عام"
+
+            # =====================
+            # SAVE TO DB (USING DB_EXECUTE)
+            # =====================
+
+            result = db_execute("""
+                INSERT INTO news (
+                    title,
+                    url,
+                    image,
+                    category,
+                    confidence,
+                    content
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (url) DO NOTHING
+                RETURNING id
+            """, (
+                item["title"],
+                item["url"],
+                item["image"],
+                category,
+                confidence,
+                item.get("content")
+            ), fetch=True)
+
+            # duplicate
+            if not result:
+                print("⚠️ ARTICLE ALREADY EXISTS:", item["title"])
+                continue
+
+            news_id = result[0]
+
+            print("\n🟢 NEW ARTICLE")
+            print(f"TITLE: {item['title']}")
+
+            # =====================
+            # GENERATE IMAGE
+            # =====================
+
+            generate_post_image(
+                item["title"],
+                item["image"],
+                news_id,
+                item["url"],
+                category,
+                confidence,
+                item.get("content")
+            )
+
+            # =====================
+            # SAVE TRAINING DATA
+            # =====================
+
+            if confidence >= 0.65 and category != "عام":
+
+                db_execute("""
+                    INSERT INTO confirmed_training (
+                        title,
+                        category,
+                        confidence
+                    )
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (title) DO NOTHING
+                """, (
+                    item["title"],
+                    category,
+                    confidence
+                ))
+
+        except Exception as e:
+            print(f"❌ SAVE ERROR: {e}")
+
+# =========================
+# TEMPLATE CONFIG
+# =========================
 
 TEMPLATE_CONFIG = {
 
@@ -62,8 +185,9 @@ TEMPLATE_CONFIG = {
 
 }
 
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# =========================
+# CATEGORY MAP
+# =========================
 
 MAP = {
     "sports": "رياضة",
@@ -72,19 +196,54 @@ MAP = {
     "social": "اجتماعية"
 }
 
+# =========================
+# CONFIG
+# =========================
 
+BASE_URL = "https://mnsht.net"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+}
+
+FONT_PATH = "Cairo-Black.ttf"
+
+MAX_FONT_SIZE = 60
+MIN_FONT_SIZE = 26
+
+TEXT_COLOR = (255, 255, 255)
+
+# =========================
+# SESSION
+# =========================
+
+session = requests.Session()
+session.headers.update(HEADERS)
+
+print("🚀 APP STARTED")
+print("📰 WAITING FOR NEWS...")
+
+# =========================
+# HELPERS
+# =========================
 
 def clean_text(text):
     return unicodedata.normalize("NFKC", str(text or ""))
 
 
 def send_photo(image_path, title, url, category, confidence, content):
+
     api_url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
 
     title = clean_text(title)
+
     content = clean_text(content or "")
 
-    short_content = content[:500] + "..." if len(content) > 500 else content
+    short_content = (
+        content[:500] + "..."
+        if len(content) > 500
+        else content
+    )
 
     caption = f"""
 
@@ -98,145 +257,45 @@ def send_photo(image_path, title, url, category, confidence, content):
 
     keyboard = {
         "inline_keyboard": [
-            [{"text": "📖 Read More", "url": url}],
-            [{"text": "🔗 Share", "url": f"https://t.me/share/url?url={url}&text={title}"}]
+            [
+                {
+                    "text": "📖 Read More",
+                    "url": url
+                }
+            ],
+            [
+                {
+                    "text": "🔗 Share",
+                    "url": f"https://t.me/share/url?url={url}&text={title}"
+                }
+            ]
         ]
     }
 
-    with open(image_path, "rb") as photo:
-        requests.post(
-            api_url,
-            data={
-                "chat_id": CHAT_ID,
-                "caption": caption,
-                "reply_markup": json.dumps(keyboard),
-                "parse_mode": "HTML"
-            },
-            files={"photo": photo}
-        )
+    try:
 
+        with open(image_path, "rb") as photo:
 
-# =========================
-# CONFIG
-# =========================
+            requests.post(
+                api_url,
+                data={
+                    "chat_id": CHAT_ID,
+                    "caption": caption,
+                    "reply_markup": json.dumps(keyboard),
+                    "parse_mode": "HTML"
+                },
+                files={
+                    "photo": photo
+                },
+                timeout=30
+            )
 
-BASE_URL = "https://mnsht.net"
+        print("✅ SENT TO TELEGRAM")
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-}
+    except Exception as e:
 
-# =========================
-# TEMPLATE SETTINGS
-# =========================
-
-TEMPLATE_PATH = "template.png"
-FONT_PATH = "Cairo-Black.ttf"
-
-OUTPUT_FOLDER = "generated"
-
-MAX_FONT_SIZE = 60
-MIN_FONT_SIZE = 26
-
-TEXT_COLOR = (255, 255, 255)
-
-# # =========================
-# # IMAGE AREA
-# # =========================
-
-
-# IMAGE_X = 0
-# IMAGE_Y = 0
-
-# IMAGE_WIDTH = 1080
-# IMAGE_HEIGHT = 835
-
-# # =========================
-# # TEXT AREA
-# # =========================
-# # 340,840 -> 1070,1070
-
-# TEXT_BOX_X = 340
-# TEXT_BOX_Y = 820
-
-# TEXT_BOX_WIDTH = 730
-# TEXT_BOX_HEIGHT = 230
-
-# LINE_HEIGHT = 65
-
-# =========================
-# CREATE OUTPUT FOLDER
-# =========================
-
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
-# =========================
-# SESSION
-# =========================
-
-session = requests.Session()
-session.headers.update(HEADERS)
-
-print("APP STARTED")
-print("WAITING FOR NEWS...")
-
-# =========================
-# DATABASE
-# =========================
-
-conn = sqlite3.connect("news.db")
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS news (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT UNIQUE,
-    url TEXT UNIQUE,
-    image TEXT,
-    category TEXT,
-    confidence REAL,
-    content TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS confirmed_training (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT UNIQUE,
-    category TEXT,
-    confidence REAL,
-    source TEXT DEFAULT 'auto',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)
-""")
-
-cursor.execute("""
-CREATE UNIQUE INDEX IF NOT EXISTS idx_news_url ON news(url)
-""")
-
-
-try:
-    cursor.execute("ALTER TABLE news ADD COLUMN reviewed INTEGER DEFAULT 0")
-    conn.commit()
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE news ADD COLUMN content TEXT")
-    conn.commit()
-except sqlite3.OperationalError:
-    pass
-
-conn.commit()
-# =========================
-# LOAD FONT
-# =========================
-
-
-# =========================
-# HELPERS
-# =========================
+        print("❌ TELEGRAM ERROR:", e)
+        
 
 def get_html():
 
@@ -249,14 +308,14 @@ def get_html():
 
     return response.text
 
+
 def news_exists(url):
-
-    cursor.execute(
-        "SELECT id FROM news WHERE url = ?",
-        (url,)
+    result = db_execute(
+        "SELECT id FROM news WHERE url = %s",
+        (url,),
+        fetch=True
     )
-
-    return cursor.fetchone() is not None
+    return result is not None
 
 def clean_image_url(src):
 
@@ -285,28 +344,50 @@ def clean_image_url(src):
 
 
 def fetch_article_content(url, max_words=50):
-    try:
-        response = session.get(url, timeout=15)
-        soup = BeautifulSoup(response.text, "lxml")
 
-        
-        tag = soup.select_one("div.paragraph-list")
+    try:
+
+        response = session.get(
+            url,
+            timeout=15
+        )
+
+        response.raise_for_status()
+
+        soup = BeautifulSoup(
+            response.text,
+            "lxml"
+        )
+
+        tag = soup.select_one(
+            "div.paragraph-list"
+        )
 
         if not tag:
             return None
 
-        
         paragraphs = tag.find_all("p")
-        content = " ".join(p.get_text(strip=True) for p in paragraphs)
 
-        
+        content = " ".join(
+            p.get_text(strip=True)
+            for p in paragraphs
+        )
+
         words = content.split()
-        content = " ".join(words[:max_words])
+
+        content = " ".join(
+            words[:max_words]
+        )
 
         return content if content else None
 
-    except Exception:
+    except Exception as e:
+
+        print("❌ ARTICLE CONTENT ERROR:", e)
+        
         return None
+
+
 
 # =========================
 # ARABIC TEXT
@@ -322,12 +403,17 @@ def prepare_ar_text(text):
 
     return bidi_text
 
+
 # =========================
 # WRAP TEXT
 # =========================
 
-
-def wrap_text(draw, text, font, max_width):
+def wrap_text(
+    draw,
+    text,
+    font,
+    max_width
+):
 
     words = text.split()
 
@@ -379,7 +465,11 @@ def fit_text(
     best_lines = None
     best_line_height = None
 
-    for size in range(MAX_FONT_SIZE, MIN_FONT_SIZE - 1, -2):
+    for size in range(
+        MAX_FONT_SIZE,
+        MIN_FONT_SIZE - 1,
+        -2
+    ):
 
         font = ImageFont.truetype(
             font_path,
@@ -433,7 +523,15 @@ def fit_text(
         best_line_height
     )
 
-def generate_post_image(title, image_url, news_id, url, category, confidence, content):
+def generate_post_image(
+    title,
+    image_url,
+    news_id,
+    url,
+    category,
+    confidence,
+    content
+):
 
     print("CATEGORY DEBUG:", category)
     print("AVAILABLE KEYS:", TEMPLATE_CONFIG.keys())
@@ -447,7 +545,11 @@ def generate_post_image(title, image_url, news_id, url, category, confidence, co
         config = TEMPLATE_CONFIG.get(category)
 
         if config is None:
-            print(f"⚠️ Unknown category: {category} → fallback to عام")
+
+            print(
+                f"⚠️ Unknown category: {category} → fallback to عام"
+            )
+
             config = TEMPLATE_CONFIG["عام"]
 
         image_x1, image_y1, image_x2, image_y2 = config["image_box"]
@@ -456,6 +558,7 @@ def generate_post_image(title, image_url, news_id, url, category, confidence, co
 
         TEXT_BOX_X = text_x1
         TEXT_BOX_Y = text_y1
+
         TEXT_BOX_WIDTH = text_x2 - text_x1
         TEXT_BOX_HEIGHT = text_y2 - text_y1
 
@@ -464,12 +567,16 @@ def generate_post_image(title, image_url, news_id, url, category, confidence, co
         # =====================
 
         template_path = config.get("template")
+
         if not os.path.exists(template_path):
+
             print(f"❌ TEMPLATE NOT FOUND: {template_path}")
+
             return
 
-        template = Image.open(template_path).convert("RGBA")
-
+        template = Image.open(
+            template_path
+        ).convert("RGBA")
 
         # =====================
         # DOWNLOAD IMAGE
@@ -478,11 +585,26 @@ def generate_post_image(title, image_url, news_id, url, category, confidence, co
         news_img = None
 
         if image_url:
+
             try:
-                response = session.get(image_url, timeout=20)
-                news_img = Image.open(BytesIO(response.content)).convert("RGBA")
-            except:
+
+                response = session.get(
+                    image_url,
+                    timeout=20
+                )
+
+                response.raise_for_status()
+
+                news_img = Image.open(
+                    BytesIO(response.content)
+                ).convert("RGBA")
+
+            except Exception as e:
+
+                print("❌ IMAGE DOWNLOAD ERROR:", e)
+
                 news_img = None
+                
 
         # =====================
         # PROCESS IMAGE
@@ -490,27 +612,63 @@ def generate_post_image(title, image_url, news_id, url, category, confidence, co
 
         if news_img:
 
-            img_ratio = news_img.width / news_img.height
-            target_ratio = (image_x2 - image_x1) / (image_y2 - image_y1)
+            img_ratio = (
+                news_img.width /
+                news_img.height
+            )
+
+            target_ratio = (
+                (image_x2 - image_x1) /
+                (image_y2 - image_y1)
+            )
 
             if img_ratio > target_ratio:
-                new_width = int(news_img.height * target_ratio)
-                left = (news_img.width - new_width) // 2
+
+                new_width = int(
+                    news_img.height *
+                    target_ratio
+                )
+
+                left = (
+                    news_img.width -
+                    new_width
+                ) // 2
 
                 news_img = news_img.crop(
-                    (left, 0, left + new_width, news_img.height)
+                    (
+                        left,
+                        0,
+                        left + new_width,
+                        news_img.height
+                    )
                 )
 
             else:
-                new_height = int(news_img.width / target_ratio)
-                top = (news_img.height - new_height) // 2
+
+                new_height = int(
+                    news_img.width /
+                    target_ratio
+                )
+
+                top = (
+                    news_img.height -
+                    new_height
+                ) // 2
 
                 news_img = news_img.crop(
-                    (0, top, news_img.width, top + new_height)
+                    (
+                        0,
+                        top,
+                        news_img.width,
+                        top + new_height
+                    )
                 )
 
             news_img = news_img.resize(
-                (image_x2 - image_x1, image_y2 - image_y1),
+                (
+                    image_x2 - image_x1,
+                    image_y2 - image_y1
+                ),
                 Image.LANCZOS
             )
 
@@ -518,31 +676,54 @@ def generate_post_image(title, image_url, news_id, url, category, confidence, co
         # LAYER SYSTEM
         # =====================
 
-        base = Image.new("RGBA", template.size, (0, 0, 0, 0))
+        base = Image.new(
+            "RGBA",
+            template.size,
+            (0, 0, 0, 0)
+        )
+
         base.paste(template, (0, 0))
 
         # default + social → image on top
         if category in ["عام", "اجتماعية"]:
 
             if news_img:
-                base.paste(news_img, (image_x1, image_y1), news_img)
+
+                base.paste(
+                    news_img,
+                    (image_x1, image_y1),
+                    news_img
+                )
 
             final_img = base
 
         else:
 
-            background = Image.new("RGBA", template.size, (0, 0, 0, 255))
+            background = Image.new(
+                "RGBA",
+                template.size,
+                (0, 0, 0, 255)
+            )
 
             if news_img:
-                background.paste(news_img, (image_x1, image_y1))
 
-            final_img = Image.alpha_composite(background, template)
+                background.paste(
+                    news_img,
+                    (image_x1, image_y1)
+                )
+
+            final_img = Image.alpha_composite(
+                background,
+                template
+            )
 
         # =====================
         # TEXT DRAWING
         # =====================
 
         draw = ImageDraw.Draw(final_img)
+
+        title = clean_text(title)
 
         title = prepare_ar_text(title)
 
@@ -554,21 +735,44 @@ def generate_post_image(title, image_url, news_id, url, category, confidence, co
             TEXT_BOX_HEIGHT
         )
 
+        if not font:
+            print("❌ FONT FIT ERROR")
+            return
+
         lines.reverse()
 
-        total_text_height = len(lines) * line_height
+        total_text_height = (
+            len(lines) *
+            line_height
+        )
 
-        y = TEXT_BOX_Y + ((TEXT_BOX_HEIGHT - total_text_height) // 2)
+        y = TEXT_BOX_Y + (
+            (TEXT_BOX_HEIGHT - total_text_height) // 2
+        )
 
         for line in lines:
 
-            bbox = draw.textbbox((0, 0), line, font=font)
+            bbox = draw.textbbox(
+                (0, 0),
+                line,
+                font=font
+            )
+
             width = bbox[2] - bbox[0]
 
-            x = TEXT_BOX_X + ((TEXT_BOX_WIDTH - width) // 2)
+            x = TEXT_BOX_X + (
+                (TEXT_BOX_WIDTH - width) // 2
+            )
 
-            draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0))
+            # shadow
+            draw.text(
+                (x + 2, y + 2),
+                line,
+                font=font,
+                fill=(0, 0, 0)
+            )
 
+            # main text
             draw.text(
                 (x, y),
                 line,
@@ -584,16 +788,33 @@ def generate_post_image(title, image_url, news_id, url, category, confidence, co
         # SAVE
         # =====================
 
-        output_path = os.path.join(OUTPUT_FOLDER, f"news_{news_id}.png")
+        output_path = os.path.join(
+            OUTPUT_FOLDER,
+            f"news_{news_id}.png"
+        )
 
-        final_img.save(output_path, quality=100)
+        final_img.save(
+            output_path,
+            quality=100
+        )
 
-        send_photo(output_path, None, url, category, confidence, content)
+        send_photo(
+            output_path,
+            None,
+            url,
+            category,
+            confidence,
+            content
+        )
 
         print(f"🖼️ IMAGE SAVED: {output_path}")
 
     except Exception as e:
-        print(f"IMAGE ERROR: {e}")
+
+        
+
+        print(f"❌ IMAGE ERROR: {e}")
+
 
 # =========================
 # EXTRACT NEWS
@@ -635,6 +856,7 @@ def extract_news(
                 a_tag.get("href")
             )
 
+            # 🔥 PostgreSQL-safe duplicate check
             if news_exists(url):
                 continue
 
@@ -642,10 +864,9 @@ def extract_news(
 
             title = (
                 h3.get_text(strip=True)
-                if h3 else
-                "بدون عنوان"
+                if h3
+                else "بدون عنوان"
             )
-
 
             img_tag = card.find("img")
 
@@ -663,46 +884,54 @@ def extract_news(
                 raw_img_src
             )
 
-
             if (
-                final_image and
+                final_image
+                and
                 "logo" in final_image.lower()
             ):
+
                 final_image = None
 
+            content = fetch_article_content(url)
+
             news_list.append({
-                "title": title,
+
+                "title": clean_text(title),
+
                 "url": url,
+
                 "image": final_image,
-                "content": fetch_article_content(url)  
+
+                "content": clean_text(content)
+
             })
 
             count += 1
 
-
         except Exception as e:
 
             print(
-                f"CARD ERROR: {e}"
+                f"❌ CARD ERROR: {e}"
             )
+            
 
     return news_list
-
-
 
 def save_news(news):
 
     for item in news:
 
         try:
+
             category, confidence = classify_news(
-            item["title"],
-            content=item.get("content")
-        )
+                item["title"],
+                content=item.get("content")
+            )
 
             # =====================
             # HANDLE UNKNOWN
             # =====================
+
             if category is None:
                 print("⚠️ LOW CONFIDENCE NEWS:", item["title"])
                 category = "عام"
@@ -711,28 +940,48 @@ def save_news(news):
             # =====================
             # VALIDATE CATEGORY
             # =====================
+
             if category not in TEMPLATE_CONFIG:
                 category = "عام"
 
             # =====================
             # SAVE TO DB
             # =====================
-            cursor.execute("""
-            INSERT INTO news (title, url, image, category, confidence, content)
-            VALUES (?, ?, ?, ?, ?, ?)
+
+            result = db_execute("""
+                INSERT INTO news (
+                    title,
+                    url,
+                    image,
+                    category,
+                    confidence,
+                    content
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (url) DO NOTHING
+                RETURNING id
             """, (
                 item["title"],
                 item["url"],
                 item["image"],
                 category,
                 confidence,
-                item.get("content")   
-            ))
+                item.get("content")
+            ), fetch=True)
 
-            news_id = cursor.lastrowid
+            # duplicate check
+            if not result:
+                print("⚠️ ARTICLE ALREADY EXISTS:", item["title"])
+                continue
+
+            news_id = result[0]
 
             print("\n🟢 NEW ARTICLE")
             print(f"TITLE: {item['title']}")
+
+            # =====================
+            # GENERATE IMAGE
+            # =====================
 
             generate_post_image(
                 item["title"],
@@ -745,23 +994,27 @@ def save_news(news):
             )
 
             # =====================
-            # SAVE TO TRAINING DATA
+            # SAVE TRAINING DATA
             # =====================
-            if confidence >= 0.65 and category != "عام":
-                cursor.execute("""
-                    INSERT OR IGNORE INTO confirmed_training 
-                    (title, category, confidence)
-                    VALUES (?, ?, ?)
-                """, (item["title"], category, confidence))
 
-        except sqlite3.IntegrityError:
-            pass
+            if confidence >= 0.65 and category != "عام":
+
+                db_execute("""
+                    INSERT INTO confirmed_training (
+                        title,
+                        category,
+                        confidence
+                    )
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (title) DO NOTHING
+                """, (
+                    item["title"],
+                    category,
+                    confidence
+                ))
 
         except Exception as e:
             print(f"❌ SAVE ERROR: {e}")
-
-    conn.commit()
-
 # =========================
 # MAIN LOOP
 # =========================
@@ -773,31 +1026,52 @@ def run():
     while True:
 
         try:
-            print(f"\n🔄 Checking for news... ({time.strftime('%H:%M:%S')})")
+
+            print(
+                f"\n🔄 Checking for news... "
+                f"({time.strftime('%H:%M:%S')})"
+            )
 
             html = get_html()
 
             limit = 5 if first_run else 50
-            news = extract_news(html, limit=limit)
+
+            news = extract_news(
+                html,
+                limit=limit
+            )
 
             first_run = False
 
             if news:
+
                 save_news(news)
-                print(f"✅ Added {len(news)} articles.")
+
+                print(
+                    f"✅ Added {len(news)} articles."
+                )
+
             else:
+
                 print("😴 No new updates.")
 
         except requests.exceptions.RequestException as e:
+
             print(f"🌐 NETWORK ERROR: {e}")
-            time.sleep(10) 
+
+            time.sleep(10)
 
         except Exception as e:
-            print(f"⚠️ LOOP ERROR: {e}")
-            time.sleep(5)
 
+            
+
+            print(f"⚠️ LOOP ERROR: {e}")
+
+            time.sleep(5)
+            
 
         time.sleep(90)
+
 
 # =========================
 # START
@@ -805,4 +1079,9 @@ def run():
 
 if __name__ == "__main__":
 
-    run()
+    try:
+
+        run()
+
+    finally:
+        print("🔌 DATABASE CONNECTION CLOSED")

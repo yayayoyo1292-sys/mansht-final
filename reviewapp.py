@@ -1,47 +1,10 @@
-import sqlite3
 from fastapi import FastAPI
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from db import get_conn
 
 app = FastAPI()
 
-DB = "news.db"
 LOCK_TIMEOUT_MINUTES = 10
-
-
-# =========================
-# Database Migration
-# =========================
-
-conn = sqlite3.connect(DB)
-cursor = conn.cursor()
-
-try:
-    cursor.execute("""
-        ALTER TABLE news
-        ADD COLUMN reviewed INTEGER DEFAULT 0
-    """)
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("""
-        ALTER TABLE news
-        ADD COLUMN locked_by TEXT
-    """)
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("""
-        ALTER TABLE news
-        ADD COLUMN locked_at TEXT
-    """)
-except sqlite3.OperationalError:
-    pass
-
-conn.commit()
-conn.close()
 
 
 # =========================
@@ -55,58 +18,65 @@ class ReviewRequest(BaseModel):
 
 
 # =========================
-# GET ARTICLE (WITH TIMEOUT LOCK)
+# GET ARTICLE
 # =========================
 
 @app.get("/news/review")
 def get_news(reviewer: str):
 
-    conn = sqlite3.connect(DB)
+    conn = get_conn()
     cursor = conn.cursor()
 
-    # 🔥 أهم تعديل: ناخد المقال حتى لو lock قديم أو فاضي
-    cursor.execute("""
+    # 🔥 fetch unlocked article
+    cursor.execute(f"""
         SELECT id, title, category, confidence
         FROM news
         WHERE confidence < 0.65
-        AND reviewed = 0
+        AND reviewed = FALSE
         AND (
             locked_by IS NULL
-            OR datetime(locked_at) < datetime('now', ?)
+            OR locked_at < NOW() - INTERVAL '{LOCK_TIMEOUT_MINUTES} minutes'
         )
         ORDER BY created_at DESC
         LIMIT 1
-    """, (f"-{LOCK_TIMEOUT_MINUTES} minutes",))
+    """)
 
     row = cursor.fetchone()
 
     if not row:
+        cursor.close()
         conn.close()
-        return {"message": "No articles left"}
+
+        return {
+            "message": "No articles left"
+        }
 
     news_id = row[0]
 
-    # 🔥 Lock جديد
+    # 🔒 lock article
     cursor.execute("""
         UPDATE news
-        SET locked_by = ?,
-            locked_at = ?
-        WHERE id = ?
+        SET locked_by = %s,
+            locked_at = NOW()
+        WHERE id = %s
     """, (
         reviewer,
-        datetime.utcnow().isoformat(),
         news_id
     ))
 
     conn.commit()
-    conn.close()
 
-    return {
+    result = {
         "id": row[0],
         "title": row[1],
         "predicted": row[2],
         "confidence": row[3]
     }
+
+    cursor.close()
+    conn.close()
+
+    return result
 
 
 # =========================
@@ -116,22 +86,24 @@ def get_news(reviewer: str):
 @app.post("/news/review")
 def review_news(data: ReviewRequest):
 
-    conn = sqlite3.connect(DB)
+    conn = get_conn()
     cursor = conn.cursor()
 
     cursor.execute("""
         UPDATE news
-        SET category = ?,
-            reviewed = 1,
+        SET category = %s,
+            reviewed = TRUE,
             locked_by = NULL,
             locked_at = NULL
-        WHERE id = ?
+        WHERE id = %s
     """, (
         data.category,
         data.id
     ))
 
     conn.commit()
+
+    cursor.close()
     conn.close()
 
     return {
