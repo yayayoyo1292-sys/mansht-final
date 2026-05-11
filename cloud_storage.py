@@ -13,7 +13,7 @@ def upload_image(image, filename):
     image.save(buffer, format="PNG")
     buffer.seek(0)
 
-    supabase.storage.from_("news-images").upload(
+    supabase.storage.from_("generated").upload(
         path=filename,
         file=buffer.read(),
         file_options={"content-type": "image/png"}
