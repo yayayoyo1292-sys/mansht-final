@@ -103,7 +103,7 @@ def save_news(news):
                 continue
 
             news_id = result[0]
-            filename = f"news_{news_id}.png"
+            filename = f"news_{news_id}.jpg"
             print("\n🟢 NEW ARTICLE")
             print(f"TITLE: {item['title']}")
 
@@ -717,7 +717,7 @@ def generate_post_image(
         # CLOUD UPLOAD (BACKUP)
         # =====================
 
-        filename = f"news_{news_id}.png"
+        filename = f"news_{news_id}.jpg"
         upload_image(final_img, filename)
 
         # =====================
@@ -727,7 +727,14 @@ def generate_post_image(
         import io
 
         buffer = io.BytesIO()
-        final_img.save(buffer, format="PNG")
+        rgb_img = final_img.convert("RGB")
+
+        rgb_img.save(
+            buffer,
+            format="JPEG",
+            quality=85,
+            optimize=True
+        )
         buffer.seek(0)
 
         send_photo(
