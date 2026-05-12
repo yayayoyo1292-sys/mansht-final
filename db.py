@@ -14,15 +14,23 @@ def get_conn():
 def db_execute(query, params=None, fetch=False):
     conn = get_conn()
     cursor = conn.cursor()
+
     try:
         cursor.execute(query, params or ())
+
+        result = None
+
         if fetch:
-            return cursor.fetchone()
+            result = cursor.fetchone()
 
         conn.commit()
+
+        return result
+
     except Exception as e:
         conn.rollback()
         raise e
+
     finally:
         cursor.close()
         conn.close()
