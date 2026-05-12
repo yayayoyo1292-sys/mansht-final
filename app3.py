@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import time
 import re
+import random
 import os
 import unicodedata
 from db import db_execute
@@ -313,10 +314,7 @@ def send_photo(photo_file, title, url, category, confidence, content):
 
 def get_html():
 
-    response = session.get(
-        BASE_URL,
-        timeout=20
-    )
+    response = session.get(BASE_URL, timeout=(10, 30) )
 
     response.raise_for_status()
 
@@ -329,7 +327,7 @@ def news_exists(url):
         (url,),
         fetch=True
     )
-    return result is not None
+    return result is not None and len(result) > 0
 
 def clean_image_url(src):
 
@@ -775,8 +773,9 @@ def extract_news(
     count = 0
 
     for card in cards:
-
+        count += 1
         if count >= limit:
+         
             break
 
         try:
@@ -1005,7 +1004,7 @@ def run():
             time.sleep(5)
             
 
-        time.sleep(90)
+        time.sleep(random.randint(60, 120))
 
 
 # =========================
@@ -1015,8 +1014,12 @@ def run():
 if __name__ == "__main__":
 
     try:
+        while True:
+            run()
+            time.sleep(60)
 
-        run()
+    except KeyboardInterrupt:
+        print("Stopped manually")
 
-    finally:
-        print("🔌 DATABASE CONNECTION CLOSED")
+    except Exception as e:
+        print("CRASH:", e)
