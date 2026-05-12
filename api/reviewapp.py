@@ -10,19 +10,17 @@ app = FastAPI()
 # =========================
 # CORS FIX
 # =========================
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        # 🔥 مهم جدًا في الإنتاج (Frontend domain على Vercel أو غيره)
-        "*"
+        "https://mansht-final.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 LOCK_TIMEOUT_MINUTES = 10
 
