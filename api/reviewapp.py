@@ -2,20 +2,22 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from db import get_conn
-
 import os
 import uvicorn
+
 app = FastAPI()
 
 # =========================
-# CORS FIX (IMPORTANT)
+# CORS FIX
 # =========================
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "http://127.0.0.1:5173"
+        "http://127.0.0.1:5173",
+        # 🔥 مهم جدًا في الإنتاج (Frontend domain على Vercel أو غيره)
+        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -46,8 +48,6 @@ def get_news(reviewer: str):
     cursor = conn.cursor()
 
     try:
-
-        # 🔥 خطوة آمنة: اختيار + قفل في نفس العملية
         cursor.execute("""
             WITH next_article AS (
                 SELECT id
@@ -70,7 +70,6 @@ def get_news(reviewer: str):
         """, (reviewer,))
 
         row = cursor.fetchone()
-
         conn.commit()
 
         if not row:
@@ -99,7 +98,6 @@ def review_news(data: ReviewRequest):
     cursor = conn.cursor()
 
     try:
-
         cursor.execute("""
             UPDATE news
             SET category = %s,
@@ -124,6 +122,9 @@ def review_news(data: ReviewRequest):
         conn.close()
 
 
+# =========================
+# RUN SERVER (Railway ready)
+# =========================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
