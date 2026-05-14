@@ -533,15 +533,39 @@ def generate_post_image(
             target_width = image_x2 - image_x1
             target_height = image_y2 - image_y1
         
-            # Stretch للصورة لتملأ البوكس بالكامل
-            news_img = news_img.resize(
+            news_img = news_img.convert("RGBA")
+        
+            # =========================
+            # الخلفية (Stretch + Blur)
+            # =========================
+        
+            bg = news_img.resize(
                 (target_width, target_height),
                 Image.LANCZOS
-            ).convert("RGBA")
+            )
         
-            # الإحداثيات الأصلية مباشرة
-            paste_x = image_x1
-            paste_y = image_y1
+            bg = bg.filter(ImageFilter.GaussianBlur(18))
+        
+            # =========================
+            # الصورة الأصلية بدون crop
+            # =========================
+        
+            fg = news_img.copy()
+        
+            fg.thumbnail(
+                (target_width, target_height),
+                Image.LANCZOS
+            )
+        
+            fg_w, fg_h = fg.size
+        
+            # توسيط الصورة
+            paste_x = image_x1 + ((target_width - fg_w) // 2)
+            paste_y = image_y1 + ((target_height - fg_h) // 2)
+        
+            # مكان الخلفية
+            bg_x = image_x1
+            bg_y = image_y1
 
 
         
@@ -554,12 +578,14 @@ def generate_post_image(
 
         if category in ["عام", "اجتماعية", "فن", "سياسة"]:
             if news_img:
-                base.paste(news_img, (paste_x, paste_y), news_img)
+                base.paste(bg, (bg_x, bg_y))
+                base.paste(fg, (paste_x, paste_y), fg)
             final_img = base
         else:
             background = Image.new("RGBA", template.size, (0, 0, 0, 255))
             if news_img:
-                background.paste(news_img, (paste_x, paste_y))
+                background.paste(bg, (bg_x, bg_y))
+                background.paste(fg, (paste_x, paste_y), fg)
             final_img = Image.alpha_composite(background, template)
 
         # =====================
