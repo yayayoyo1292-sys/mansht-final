@@ -223,8 +223,7 @@ def send_photo(photo_file, title, url, category, confidence, content):
         logger.info("✅ SENT TO TELEGRAM")
 
     except Exception as e:
-        logger.info("❌ TELEGRAM ERROR:", e)
-
+        logger.info(f"❌ TELEGRAM ERROR: {e}")
     finally:
         if file_to_close:
             file_to_close.close()
@@ -319,7 +318,7 @@ def fetch_article_content(url, max_words=100):
 
     except Exception as e:
 
-        logger.info("❌ ARTICLE CONTENT ERROR:", e)
+        logger.info(f"❌ ARTICLE CONTENT ERROR: {e}")
         
         return None
 
@@ -496,92 +495,83 @@ def generate_post_image(
         # =====================
         # LOAD TEMPLATE
         # =====================
-
         template_path = config.get("template")
-
         if not template_path or not os.path.exists(template_path):
             logger.info(f"❌ TEMPLATE NOT FOUND: {template_path}")
             return None
-
         template = Image.open(template_path).convert("RGBA")
 
         # =====================
         # DOWNLOAD IMAGE
         # =====================
-
         news_img = None
-
         if image_url:
             try:
                 response = session.get(image_url, timeout=20)
                 response.raise_for_status()
-
                 news_img = Image.open(
                     BytesIO(response.content)
                 ).convert("RGBA")
-
             except Exception as e:
                 logger.info(f"❌ IMAGE DOWNLOAD ERROR: {e}")
                 news_img = None
 
         # =====================
+        # LAYER SYSTEM
+        # =====================
+        base = Image.new("RGBA", template.size, (0, 0, 0, 0))
+        base.paste(template, (0, 0))
+
+        # =====================
         # PROCESS IMAGE
         # =====================
+        bg = None
+        fg = None
+        paste_x = 0
+        paste_y = 0
 
         if news_img:
             target_width = image_x2 - image_x1
             target_height = image_y2 - image_y1
             news_img = news_img.convert("RGBA")
-        
+
             # 1. تجهيز الخلفية (Stretch & Heavy Blur)
-            # بنعمل Resize يملأ البوكس بالكامل حتى لو حصل تشويه لأن الـ Blur هيداريه
             bg = news_img.resize((target_width, target_height), Image.LANCZOS)
-            bg = bg.filter(ImageFilter.GaussianBlur(25)) # زودنا الـ Blur لـ 25 لشكل أنعم
-        
+            bg = bg.filter(ImageFilter.GaussianBlur(25))
+
             # 2. تجهيز الصورة الأمامية (Foreground)
             fg = news_img.copy()
-            
-            # حساب النسبة عشان نكبر الصورة لأقصى حد مسموح به داخل الـ Frame
+
             img_ratio = fg.width / fg.height
             target_ratio = target_width / target_height
-        
+
             if img_ratio > target_ratio:
-                # الصورة أعرض من الفريم (زي اللي في صورتك) -> نثبت العرض
                 new_w = target_width
                 new_h = int(target_width / img_ratio)
             else:
-                # الصورة أطول من الفريم -> نثبت الطول
                 new_h = target_height
                 new_w = int(target_height * img_ratio)
-        
+
             fg = fg.resize((new_w, new_h), Image.LANCZOS)
-        
-            # 3. حسابات التوسيط بدقة
+
+            # 3. حسابات التوسيط
             paste_x = image_x1 + (target_width - new_w) // 2
             paste_y = image_y1 + (target_height - new_h) // 2
-        
-            # 4. اللصق (الترتيب مهم)
-            base.paste(bg, (image_x1, image_y1)) # لصق الخلفية المموهة أولاً
-            base.paste(fg, (paste_x, paste_y), fg) # لصق الصورة الأصلية فوقها
-        # =====================
-        # LAYER SYSTEM
-        # =====================
 
-        base = Image.new("RGBA", template.size, (0, 0, 0, 0))
-        base.paste(template, (0, 0))
-
+        # =====================
+        # COMPOSITE
+        # =====================
         if category in ["عام", "اجتماعية", "فن", "سياسة"]:
-            if news_img:
-                base.paste(bg, (bg_x, bg_y))
+            if bg and fg:
+                base.paste(bg, (image_x1, image_y1))
                 base.paste(fg, (paste_x, paste_y), fg)
             final_img = base
         else:
             background = Image.new("RGBA", template.size, (0, 0, 0, 255))
-            if news_img:
-                background.paste(bg, (bg_x, bg_y))
+            if bg and fg:
+                background.paste(bg, (image_x1, image_y1))
                 background.paste(fg, (paste_x, paste_y), fg)
             final_img = Image.alpha_composite(background, template)
-
         # =====================
         # TEXT DRAWING
         # =====================
@@ -692,7 +682,7 @@ def extract_news(
     count = 0
 
     for card in cards:
-        count += 1
+       
         if count >= limit:
          
             break
