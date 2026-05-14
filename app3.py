@@ -529,19 +529,24 @@ def generate_post_image(
         # =====================
 
         if news_img:
+
             target_width = image_x2 - image_x1
             target_height = image_y2 - image_y1
-
-            # هذه الدالة تقوم بتغيير حجم الصورة لتناسب المربع مع الحفاظ على أبعادها الأصلية كاملة
-            news_img.thumbnail((target_width, target_height), Image.LANCZOS)
-            
-            # الآن نحسب الإحداثيات الجديدة لوضع الصورة في منتصف المربع المخصص تماماً
+        
+            # الحفاظ على أبعاد الصورة بدون crop
+            news_img.thumbnail(
+                (target_width, target_height),
+                Image.LANCZOS
+            )
+        
+            news_img = news_img.convert("RGBA")
+        
+            # أبعاد الصورة بعد التصغير
             actual_w, actual_h = news_img.size
-            offset_x = image_x1 + (target_width - actual_w) // 2
-            offset_y = image_y1 + (target_height - actual_h) // 2
-            
-            # تحديث الإحداثيات لاستخدامها في عملية الـ paste لاحقاً
-            image_x1, image_y1 = offset_x, offset_y
+        
+            # توسيط الصورة داخل البوكس
+            paste_x = image_x1 + ((target_width - actual_w) // 2)
+            paste_y = image_y1 + ((target_height - actual_h) // 2)
 
 
         
@@ -554,12 +559,12 @@ def generate_post_image(
 
         if category in ["عام", "اجتماعية", "فن", "سياسة"]:
             if news_img:
-                base.paste(news_img, (image_x1, image_y1), news_img)
+                base.paste(news_img, (paste_x, paste_y), news_img)
             final_img = base
         else:
             background = Image.new("RGBA", template.size, (0, 0, 0, 255))
             if news_img:
-                background.paste(news_img, (image_x1, image_y1))
+                background.paste(news_img, (paste_x, paste_y))
             final_img = Image.alpha_composite(background, template)
 
         # =====================
