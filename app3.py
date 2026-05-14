@@ -530,6 +530,8 @@ def generate_post_image(
         paste_x = 0
         paste_y = 0
 
+
+        
         if news_img:
             target_width = image_x2 - image_x1
             target_height = image_y2 - image_y1
@@ -545,18 +547,27 @@ def generate_post_image(
             img_ratio = fg.width / fg.height
             target_ratio = target_width / target_height
 
+
+            
             if img_ratio > target_ratio:
-                new_w = target_width
-                new_h = int(target_width / img_ratio)
-            else:
+                # الصورة أعرض → نثبت الطول ونقص العرض
                 new_h = target_height
                 new_w = int(target_height * img_ratio)
-
+            else:
+                # الصورة أطول → نثبت العرض ونقص الطول
+                new_w = target_width
+                new_h = int(target_width / img_ratio)
+            
             fg = fg.resize((new_w, new_h), Image.LANCZOS)
-
-            # 3. حسابات التوسيط
-            paste_x = image_x1 + (target_width - new_w) // 2
-            paste_y = image_y1 + (target_height - new_h) // 2
+            
+            # crop من المنتصف
+            crop_x = (new_w - target_width) // 2
+            crop_y = (new_h - target_height) // 2
+            fg = fg.crop((crop_x, crop_y, crop_x + target_width, crop_y + target_height))
+            
+            # التوسيط بقى ثابت دايماً
+            paste_x = image_x1
+            paste_y = image_y1
 
         # =====================
         # COMPOSITE
