@@ -75,28 +75,28 @@ TEMPLATE_CONFIG = {
 
     "سياسة": {
         "template": os.path.join(TEMPLATES_DIR, "سياسة.png"),
-        "image_box": (0, 0, 1080, 835),
+        "image_box": (0, 0, 1080, 820),
         "text_box": (340, 820, 1070, 1050),
         "align": "center"
     },
 
     "فن": {
         "template": os.path.join(TEMPLATES_DIR, "فن.png"),
-        "image_box": (0, 210, 1080, 1070),
+        "image_box": (0, 146, 1080, 416),
         "text_box": (50, 1050, 1030, 1280),
         "align": "center"
     },
 
     "اجتماعية": {
         "template": os.path.join(TEMPLATES_DIR, "اجتماعية.png"),
-        "image_box": (35, 180, 1050, 758),
+        "image_box": (46, 188, 1030, 603),
         "text_box": (10, 845, 1070, 1210),
         "align": "center"
     },
 
     "عام": {
         "template": os.path.join(TEMPLATES_DIR, "عام.png"),
-        "image_box": (35, 180, 1050, 758),
+        "image_box": (46, 188, 1030, 603),
         "text_box": (10, 845, 1070, 1210),
         "align": "center"
     }
@@ -273,7 +273,7 @@ def clean_image_url(src):
     return full_url
 
 
-def fetch_article_content(url, max_words=50):
+def fetch_article_content(url, max_words=100):
 
     try:
 
@@ -529,38 +529,22 @@ def generate_post_image(
         # =====================
 
         if news_img:
+            target_width = image_x2 - image_x1
+            target_height = image_y2 - image_y1
 
-            img_ratio = news_img.width / news_img.height
+            # هذه الدالة تقوم بتغيير حجم الصورة لتناسب المربع مع الحفاظ على أبعادها الأصلية كاملة
+            news_img.thumbnail((target_width, target_height), Image.LANCZOS)
+            
+            # الآن نحسب الإحداثيات الجديدة لوضع الصورة في منتصف المربع المخصص تماماً
+            actual_w, actual_h = news_img.size
+            offset_x = image_x1 + (target_width - actual_w) // 2
+            offset_y = image_y1 + (target_height - actual_h) // 2
+            
+            # تحديث الإحداثيات لاستخدامها في عملية الـ paste لاحقاً
+            image_x1, image_y1 = offset_x, offset_y
 
-            target_ratio = (
-                (image_x2 - image_x1) /
-                (image_y2 - image_y1)
-            )
 
-            if img_ratio > target_ratio:
-                new_width = int(news_img.height * target_ratio)
-                left = (news_img.width - new_width) // 2
-
-                news_img = news_img.crop((
-                    left, 0,
-                    left + new_width,
-                    news_img.height
-                ))
-            else:
-                new_height = int(news_img.width / target_ratio)
-                top = (news_img.height - new_height) // 2
-
-                news_img = news_img.crop((
-                    0, top,
-                    news_img.width,
-                    top + new_height
-                ))
-
-            news_img = news_img.resize(
-                (image_x2 - image_x1, image_y2 - image_y1),
-                Image.LANCZOS
-            )
-
+        
         # =====================
         # LAYER SYSTEM
         # =====================
@@ -568,7 +552,7 @@ def generate_post_image(
         base = Image.new("RGBA", template.size, (0, 0, 0, 0))
         base.paste(template, (0, 0))
 
-        if category in ["عام", "اجتماعية"]:
+        if category in ["عام", "اجتماعية", "فن", "سياسة"]:
             if news_img:
                 base.paste(news_img, (image_x1, image_y1), news_img)
             final_img = base
