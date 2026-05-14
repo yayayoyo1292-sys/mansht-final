@@ -89,14 +89,14 @@ TEMPLATE_CONFIG = {
 
     "اجتماعية": {
         "template": os.path.join(TEMPLATES_DIR, "اجتماعية.png"),
-        "image_box": (46, 188, 1030, 603),
+        "image_box": (46, 188, 1040, 744),
         "text_box": (10, 845, 1070, 1210),
         "align": "center"
     },
 
     "عام": {
         "template": os.path.join(TEMPLATES_DIR, "عام.png"),
-        "image_box": (46, 188, 1030, 603),
+        "image_box": (46, 188, 1040, 744),
         "text_box": (10, 845, 1070, 1210),
         "align": "center"
     }
@@ -223,7 +223,8 @@ def send_photo(photo_file, title, url, category, confidence, content):
         logger.info("✅ SENT TO TELEGRAM")
 
     except Exception as e:
-        logger.info(f"❌ TELEGRAM ERROR: {e}")
+        logger.info("❌ TELEGRAM ERROR:", e)
+
     finally:
         if file_to_close:
             file_to_close.close()
@@ -318,7 +319,7 @@ def fetch_article_content(url, max_words=100):
 
     except Exception as e:
 
-        logger.info(f"❌ ARTICLE CONTENT ERROR: {e}")
+        logger.info("❌ ARTICLE CONTENT ERROR:", e)
         
         return None
 
@@ -495,23 +496,30 @@ def generate_post_image(
         # =====================
         # LOAD TEMPLATE
         # =====================
+
         template_path = config.get("template")
+
         if not template_path or not os.path.exists(template_path):
             logger.info(f"❌ TEMPLATE NOT FOUND: {template_path}")
             return None
+
         template = Image.open(template_path).convert("RGBA")
 
         # =====================
         # DOWNLOAD IMAGE
         # =====================
+
         news_img = None
+
         if image_url:
             try:
                 response = session.get(image_url, timeout=20)
                 response.raise_for_status()
+
                 news_img = Image.open(
                     BytesIO(response.content)
                 ).convert("RGBA")
+
             except Exception as e:
                 logger.info(f"❌ IMAGE DOWNLOAD ERROR: {e}")
                 news_img = None
@@ -560,7 +568,7 @@ def generate_post_image(
         base = Image.new("RGBA", template.size, (0, 0, 0, 0))
         base.paste(template, (0, 0))
 
-        if category in ["عام", "اجتماعية", "فن", "سياسة"]:
+        if category in ["عام", "اجتماعية", "فن"]:
             if news_img:
                 base.paste(news_img, (image_x1, image_y1), news_img)
             final_img = base
@@ -680,7 +688,7 @@ def extract_news(
     count = 0
 
     for card in cards:
-       
+        count += 1
         if count >= limit:
          
             break
