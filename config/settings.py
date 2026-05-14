@@ -8,7 +8,7 @@ ENABLE_FACEBOOK_POSTING = False  # 👈 toggle only
 
 AGING_MULTIPLIER = 0.12  # configurable 0.08 - 0.15
 
-POST_INTERVAL_MINUTES = 1
+POST_INTERVAL_MINUTES = 5
 
 KEYWORD_PRIORITY = {
     20: ["محمد بن زايد آل نهيان"],
