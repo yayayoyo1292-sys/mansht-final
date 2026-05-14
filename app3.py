@@ -517,72 +517,59 @@ def generate_post_image(
                 news_img = None
 
         # =====================
+        # PROCESS IMAGE
+        # =====================
+
+        if news_img:
+
+            img_ratio = news_img.width / news_img.height
+
+            target_ratio = (
+                (image_x2 - image_x1) /
+                (image_y2 - image_y1)
+            )
+
+            if img_ratio > target_ratio:
+                new_width = int(news_img.height * target_ratio)
+                left = (news_img.width - new_width) // 2
+
+                news_img = news_img.crop((
+                    left, 0,
+                    left + new_width,
+                    news_img.height
+                ))
+            else:
+                new_height = int(news_img.width / target_ratio)
+                top = (news_img.height - new_height) // 2
+
+                news_img = news_img.crop((
+                    0, top,
+                    news_img.width,
+                    top + new_height
+                ))
+
+            news_img = news_img.resize(
+                (image_x2 - image_x1, image_y2 - image_y1),
+                Image.LANCZOS
+            )
+
+        # =====================
         # LAYER SYSTEM
         # =====================
+
         base = Image.new("RGBA", template.size, (0, 0, 0, 0))
         base.paste(template, (0, 0))
 
-        # =====================
-        # PROCESS IMAGE
-        # =====================
-        bg = None
-        fg = None
-        paste_x = 0
-        paste_y = 0
-
-
-        
-        if news_img:
-            target_width = image_x2 - image_x1
-            target_height = image_y2 - image_y1
-            news_img = news_img.convert("RGBA")
-
-            # 1. تجهيز الخلفية (Stretch & Heavy Blur)
-            bg = news_img.resize((target_width, target_height), Image.LANCZOS)
-            bg = bg.filter(ImageFilter.GaussianBlur(25))
-
-            # 2. تجهيز الصورة الأمامية (Foreground)
-            fg = news_img.copy()
-
-            img_ratio = fg.width / fg.height
-            target_ratio = target_width / target_height
-
-
-            
-            if img_ratio > target_ratio:
-                # الصورة أعرض → نثبت الطول ونقص العرض
-                new_h = target_height
-                new_w = int(target_height * img_ratio)
-            else:
-                # الصورة أطول → نثبت العرض ونقص الطول
-                new_w = target_width
-                new_h = int(target_width / img_ratio)
-            
-            fg = fg.resize((new_w, new_h), Image.LANCZOS)
-            
-            # crop من المنتصف
-            crop_x = (new_w - target_width) // 2
-            crop_y = (new_h - target_height) // 2
-            fg = fg.crop((crop_x, crop_y, crop_x + target_width, crop_y + target_height))
-            
-            # التوسيط بقى ثابت دايماً
-            paste_x = image_x1
-            paste_y = image_y1
-
-        # =====================
-        # COMPOSITE
-        # =====================
         if category in ["عام", "اجتماعية", "فن", "سياسة"]:
-            if bg and fg:
-                base.paste(bg, (image_x1, image_y1))
-                base.paste(fg, (paste_x, paste_y), fg)
+            if news_img:
+                base.paste(news_img, (image_x1, image_y1), news_img)
             final_img = base
         else:
             background = Image.new("RGBA", template.size, (0, 0, 0, 255))
-            if bg and fg:
-                background.paste(bg, (image_x1, image_y1))
-                background.paste(fg, (paste_x, paste_y), fg)
+            if news_img:
+                background.paste(news_img, (image_x1, image_y1))
             final_img = Image.alpha_composite(background, template)
+
         # =====================
         # TEXT DRAWING
         # =====================
