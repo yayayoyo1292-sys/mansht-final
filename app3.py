@@ -493,37 +493,7 @@ def generate_post_image(
         TEXT_BOX_WIDTH = text_x2 - text_x1
         TEXT_BOX_HEIGHT = text_y2 - text_y1
 
-        # =====================
-        # LOAD TEMPLATE
-        # =====================
-
-        template_path = config.get("template")
-
-        if not template_path or not os.path.exists(template_path):
-            logger.info(f"❌ TEMPLATE NOT FOUND: {template_path}")
-            return None
-
-        template = Image.open(template_path).convert("RGBA")
-
-        # =====================
-        # DOWNLOAD IMAGE
-        # =====================
-
-        news_img = None
-
-        if image_url:
-            try:
-                response = session.get(image_url, timeout=20)
-                response.raise_for_status()
-
-                news_img = Image.open(
-                    BytesIO(response.content)
-                ).convert("RGBA")
-
-            except Exception as e:
-                logger.info(f"❌ IMAGE DOWNLOAD ERROR: {e}")
-                news_img = None
-
+        
         # =====================
         # LOAD TEMPLATE
         # =====================
