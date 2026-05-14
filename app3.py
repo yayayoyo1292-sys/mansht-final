@@ -525,57 +525,98 @@ def generate_post_image(
                 news_img = None
 
         # =====================
-        # PROCESS IMAGE
+        # LOAD TEMPLATE
         # =====================
-
-        if news_img:
-
-            img_ratio = news_img.width / news_img.height
-
-            target_ratio = (
-                (image_x2 - image_x1) /
-                (image_y2 - image_y1)
-            )
-
-            if img_ratio > target_ratio:
-                new_width = int(news_img.height * target_ratio)
-                left = (news_img.width - new_width) // 2
-
-                news_img = news_img.crop((
-                    left, 0,
-                    left + new_width,
-                    news_img.height
-                ))
-            else:
-                new_height = int(news_img.width / target_ratio)
-                top = (news_img.height - new_height) // 2
-
-                news_img = news_img.crop((
-                    0, top,
-                    news_img.width,
-                    top + new_height
-                ))
-
-            news_img = news_img.resize(
-                (image_x2 - image_x1, image_y2 - image_y1),
-                Image.LANCZOS
-            )
+        template_path = config.get("template")
+        if not template_path or not os.path.exists(template_path):
+            logger.info(f"❌ TEMPLATE NOT FOUND: {template_path}")
+            return None
+        template = Image.open(template_path).convert("RGBA")
 
         # =====================
-        # LAYER SYSTEM
+        # DOWNLOAD IMAGE
         # =====================
+        news_img = None
+        if image_url:
+            try:
+                response = session.get(image_url, timeout=20)
+                response.raise_for_status()
+                news_img = Image.open(
+                    BytesIO(response.content)
+                ).convert("RGBA")
+            except Exception as e:
+                logger.info(f"❌ IMAGE DOWNLOAD ERROR: {e}")
+                news_img = None
 
+        # =====================
+        # LAYER SYSTEM (الأول عشان base يكون جاهز)
+        # =====================
         base = Image.new("RGBA", template.size, (0, 0, 0, 0))
         base.paste(template, (0, 0))
 
+        # =====================
+        # PROCESS IMAGE — CNN Style (Blur BG + Sharp FG)
+        # =====================
+        if news_img:
+            box_w = image_x2 - image_x1
+            box_h = image_y2 - image_y1
+            img_w, img_h = news_img.size
+            img_ratio = img_w / img_h
+            box_ratio = box_w / box_h
+
+            # ── 1. BACKGROUND: يملأ الـ box بالكامل + blur شديد ──
+            if img_ratio > box_ratio:
+                bg_h = box_h
+                bg_w = int(box_h * img_ratio)
+            else:
+                bg_w = box_w
+                bg_h = int(box_w / img_ratio)
+
+            bg = news_img.resize((bg_w, bg_h), Image.LANCZOS).convert("RGBA")
+
+            # crop من المنتصف عشان يملأ الـ box بالظبط
+            bg_crop_x = (bg_w - box_w) // 2
+            bg_crop_y = (bg_h - box_h) // 2
+            bg = bg.crop((bg_crop_x, bg_crop_y, bg_crop_x + box_w, bg_crop_y + box_h))
+
+            # blur احترافي
+            bg = bg.filter(ImageFilter.GaussianBlur(radius=20))
+
+            # تعتيم خفيف فوق الـ blur عشان الـ fg يبرز
+            overlay = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 80))
+            bg = Image.alpha_composite(bg, overlay)
+
+            # ── 2. FOREGROUND: يتمدد لأقصى حجم ممكن بدون قص ──
+            if img_ratio > box_ratio:
+                fg_w = box_w
+                fg_h = int(box_w / img_ratio)
+            else:
+                fg_h = box_h
+                fg_w = int(box_h * img_ratio)
+
+            fg = news_img.resize((fg_w, fg_h), Image.LANCZOS).convert("RGBA")
+
+            # توسيط الـ fg فوق الـ bg
+            fg_x = (box_w - fg_w) // 2
+            fg_y = (box_h - fg_h) // 2
+
+            # ── 3. دمج BG + FG في layer واحد ──
+            layer = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+            layer.paste(bg, (0, 0))
+            layer.paste(fg, (fg_x, fg_y), fg)
+
+            # ── 4. لصق على الـ base ──
+            base.paste(layer, (image_x1, image_y1), layer)
+
+        # =====================
+        # COMPOSITE FINAL
+        # =====================
         if category in ["عام", "اجتماعية", "فن"]:
-            if news_img:
-                base.paste(news_img, (image_x1, image_y1), news_img)
             final_img = base
         else:
+            # رياضة وسياسة: template فوق الصورة بـ alpha_composite
             background = Image.new("RGBA", template.size, (0, 0, 0, 255))
-            if news_img:
-                background.paste(news_img, (image_x1, image_y1))
+            background.paste(base, (0, 0), base)
             final_img = Image.alpha_composite(background, template)
 
         # =====================
