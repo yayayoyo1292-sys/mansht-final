@@ -305,9 +305,15 @@ def fetch_article_content(url, max_words=50):
 
         words = content.split()
 
-        content = " ".join(
-            words[:max_words]
-        )
+        # بنبني الكلام عند أقرب نقطة بعد الكلمة 45
+        chunk = " ".join(words[:max_words])
+        cutoff = " ".join(words[:45])
+        search_area = chunk[len(cutoff):]
+        dot_index = search_area.find(".")
+        if dot_index != -1:
+            content = cutoff + search_area[:dot_index + 1]
+        else:
+            content = chunk
 
         return content if content else None
 
