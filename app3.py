@@ -529,46 +529,40 @@ def generate_post_image(
         # =====================
 
         if news_img:
-
             target_width = image_x2 - image_x1
             target_height = image_y2 - image_y1
-        
             news_img = news_img.convert("RGBA")
         
-            # =========================
-            # الخلفية (Stretch + Blur)
-            # =========================
+            # 1. تجهيز الخلفية (Stretch & Heavy Blur)
+            # بنعمل Resize يملأ البوكس بالكامل حتى لو حصل تشويه لأن الـ Blur هيداريه
+            bg = news_img.resize((target_width, target_height), Image.LANCZOS)
+            bg = bg.filter(ImageFilter.GaussianBlur(25)) # زودنا الـ Blur لـ 25 لشكل أنعم
         
-            bg = news_img.resize(
-                (target_width, target_height),
-                Image.LANCZOS
-            )
-        
-            bg = bg.filter(ImageFilter.GaussianBlur(18))
-        
-            # =========================
-            # الصورة الأصلية بدون crop
-            # =========================
-        
+            # 2. تجهيز الصورة الأمامية (Foreground)
             fg = news_img.copy()
+            
+            # حساب النسبة عشان نكبر الصورة لأقصى حد مسموح به داخل الـ Frame
+            img_ratio = fg.width / fg.height
+            target_ratio = target_width / target_height
         
-            fg.thumbnail(
-                (target_width, target_height),
-                Image.LANCZOS
-            )
+            if img_ratio > target_ratio:
+                # الصورة أعرض من الفريم (زي اللي في صورتك) -> نثبت العرض
+                new_w = target_width
+                new_h = int(target_width / img_ratio)
+            else:
+                # الصورة أطول من الفريم -> نثبت الطول
+                new_h = target_height
+                new_w = int(target_height * img_ratio)
         
-            fg_w, fg_h = fg.size
+            fg = fg.resize((new_w, new_h), Image.LANCZOS)
         
-            # توسيط الصورة
-            paste_x = image_x1 + ((target_width - fg_w) // 2)
-            paste_y = image_y1 + ((target_height - fg_h) // 2)
+            # 3. حسابات التوسيط بدقة
+            paste_x = image_x1 + (target_width - new_w) // 2
+            paste_y = image_y1 + (target_height - new_h) // 2
         
-            # مكان الخلفية
-            bg_x = image_x1
-            bg_y = image_y1
-
-
-        
+            # 4. اللصق (الترتيب مهم)
+            base.paste(bg, (image_x1, image_y1)) # لصق الخلفية المموهة أولاً
+            base.paste(fg, (paste_x, paste_y), fg) # لصق الصورة الأصلية فوقها
         # =====================
         # LAYER SYSTEM
         # =====================
