@@ -533,20 +533,15 @@ def generate_post_image(
             target_width = image_x2 - image_x1
             target_height = image_y2 - image_y1
         
-            # الحفاظ على أبعاد الصورة بدون crop
-            news_img.thumbnail(
+            # Stretch للصورة لتملأ البوكس بالكامل
+            news_img = news_img.resize(
                 (target_width, target_height),
                 Image.LANCZOS
-            )
+            ).convert("RGBA")
         
-            news_img = news_img.convert("RGBA")
-        
-            # أبعاد الصورة بعد التصغير
-            actual_w, actual_h = news_img.size
-        
-            # توسيط الصورة داخل البوكس
-            paste_x = image_x1 + ((target_width - actual_w) // 2)
-            paste_y = image_y1 + ((target_height - actual_h) // 2)
+            # الإحداثيات الأصلية مباشرة
+            paste_x = image_x1
+            paste_y = image_y1
 
 
         
