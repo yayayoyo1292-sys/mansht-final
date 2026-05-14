@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from db import get_conn
+from DB.db import get_conn
 import os
 import uvicorn
 
