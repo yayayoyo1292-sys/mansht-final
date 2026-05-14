@@ -81,9 +81,9 @@ TEMPLATE_CONFIG = {
     },
 
     "فن": {
-        "template": os.path.join(TEMPLATES_DIR, "فن.png"),
-        "image_box": (0, 146, 1080, 416),
-        "text_box": (50, 1050, 1030, 1280),
+        "template": os.path.join(TEMPLATES_DIR, "عام.png"),
+        "image_box": (46, 188, 1040, 744),
+        "text_box": (10, 845, 1070, 1210),
         "align": "center"
     },
 
