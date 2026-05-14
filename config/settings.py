@@ -4,11 +4,11 @@ from datetime import datetime
 
 FACEBOOK_START_DATE = datetime(2026, 5, 1)
 FACEBOOK_END_DATE = datetime(2026, 5, 30)
-ENABLE_FACEBOOK_POSTING = False  # 👈 toggle only
+ENABLE_FACEBOOK_POSTING = True  # 👈 toggle only
 
 AGING_MULTIPLIER = 0.12  # configurable 0.08 - 0.15
 
-POST_INTERVAL_MINUTES = 5
+POST_INTERVAL_MINUTES = 10
 
 KEYWORD_PRIORITY = {
     20: ["محمد بن زايد آل نهيان"],
