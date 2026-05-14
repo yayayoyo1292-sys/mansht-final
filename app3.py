@@ -1,4 +1,3 @@
-
 import json
 import requests
 from bs4 import BeautifulSoup
@@ -6,28 +5,42 @@ from urllib.parse import urljoin
 import time
 import re
 import random
-import os
+import os , io
 import unicodedata
-from db import db_execute
+from DB.db import db_execute
 from io import BytesIO
 from PIL import ImageFilter
 from PIL import Image, ImageDraw, ImageFont
 import arabic_reshaper
 from bidi.algorithm import get_display
-from ai import classify_news, TEMPLATES
+from ML.ai import classify_news, TEMPLATES
 from dotenv import load_dotenv
-from db import get_conn
-from cloud_storage import upload_image
-
+from DB.db import get_conn
+from DB.cloud_storage import upload_image
+from services.queue_manager import QueueManager
+import time
+from threading import Thread
+from services.scheduler import publishing_worker
+from services.recalculation_worker import recalculation_worker
+from services.date_filter import is_within_range
+from datetime import datetime
+from utils.logger import logger
+from tenacity import retry, stop_after_attempt, wait_fixed
+from supabase import create_client
+import traceback
 # =========================
 # LOAD ENV
 # =========================
+queue = QueueManager()
 
 load_dotenv()
 
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # =========================
 # PATHS
 # =========================
@@ -45,6 +58,7 @@ TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 # =========================
 # DATABASE
 # =========================
+
 
 # =========================
 # TEMPLATE CONFIG
@@ -124,8 +138,8 @@ TEXT_COLOR = (255, 255, 255)
 session = requests.Session()
 session.headers.update(HEADERS)
 
-print("🚀 APP STARTED")
-print("📰 WAITING FOR NEWS...")
+logger.info("🚀 APP STARTED")
+logger.info("📰 WAITING FOR NEWS...")
 
 # =========================
 # HELPERS
@@ -134,7 +148,10 @@ print("📰 WAITING FOR NEWS...")
 def clean_text(text):
     return unicodedata.normalize("NFKC", str(text or ""))
 
-
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_fixed(5)
+)
 def send_photo(photo_file, title, url, category, confidence, content):
 
     api_url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
@@ -203,10 +220,10 @@ def send_photo(photo_file, title, url, category, confidence, content):
             timeout=30
         )
 
-        print("✅ SENT TO TELEGRAM")
+        logger.info("✅ SENT TO TELEGRAM")
 
     except Exception as e:
-        print("❌ TELEGRAM ERROR:", e)
+        logger.info("❌ TELEGRAM ERROR:", e)
 
     finally:
         if file_to_close:
@@ -296,7 +313,7 @@ def fetch_article_content(url, max_words=50):
 
     except Exception as e:
 
-        print("❌ ARTICLE CONTENT ERROR:", e)
+        logger.info("❌ ARTICLE CONTENT ERROR:", e)
         
         return None
 
@@ -443,11 +460,12 @@ def generate_post_image(
     url,
     category,
     confidence,
-    content
+    content,
+    send_to_telegram=True   # 👈 مهم لتوحيد الجروبات
 ):
 
-    print("CATEGORY DEBUG:", category)
-    print("AVAILABLE KEYS:", TEMPLATE_CONFIG.keys())
+    logger.info(f"CATEGORY DEBUG: {category}")
+    logger.info(f"AVAILABLE KEYS: {list(TEMPLATE_CONFIG.keys())}")
 
     try:
 
@@ -458,7 +476,7 @@ def generate_post_image(
         config = TEMPLATE_CONFIG.get(category)
 
         if config is None:
-            print(f"⚠️ Unknown category: {category} → fallback to عام")
+            logger.info(f"⚠️ Unknown category: {category} → fallback to عام")
             config = TEMPLATE_CONFIG["عام"]
 
         image_x1, image_y1, image_x2, image_y2 = config["image_box"]
@@ -475,9 +493,9 @@ def generate_post_image(
 
         template_path = config.get("template")
 
-        if not os.path.exists(template_path):
-            print(f"❌ TEMPLATE NOT FOUND: {template_path}")
-            return
+        if not template_path or not os.path.exists(template_path):
+            logger.info(f"❌ TEMPLATE NOT FOUND: {template_path}")
+            return None
 
         template = Image.open(template_path).convert("RGBA")
 
@@ -497,7 +515,7 @@ def generate_post_image(
                 ).convert("RGBA")
 
             except Exception as e:
-                print("❌ IMAGE DOWNLOAD ERROR:", e)
+                logger.info(f"❌ IMAGE DOWNLOAD ERROR: {e}")
                 news_img = None
 
         # =====================
@@ -515,7 +533,6 @@ def generate_post_image(
 
             if img_ratio > target_ratio:
                 new_width = int(news_img.height * target_ratio)
-
                 left = (news_img.width - new_width) // 2
 
                 news_img = news_img.crop((
@@ -525,7 +542,6 @@ def generate_post_image(
                 ))
             else:
                 new_height = int(news_img.width / target_ratio)
-
                 top = (news_img.height - new_height) // 2
 
                 news_img = news_img.crop((
@@ -547,19 +563,13 @@ def generate_post_image(
         base.paste(template, (0, 0))
 
         if category in ["عام", "اجتماعية"]:
-
             if news_img:
                 base.paste(news_img, (image_x1, image_y1), news_img)
-
             final_img = base
-
         else:
-
             background = Image.new("RGBA", template.size, (0, 0, 0, 255))
-
             if news_img:
                 background.paste(news_img, (image_x1, image_y1))
-
             final_img = Image.alpha_composite(background, template)
 
         # =====================
@@ -579,28 +589,26 @@ def generate_post_image(
         )
 
         if not font:
-            print("❌ FONT FIT ERROR")
-            return
+            logger.info("❌ FONT FIT ERROR")
+            return None
 
         lines.reverse()
 
         total_text_height = len(lines) * line_height
 
-        y = TEXT_BOX_Y + (
-            (TEXT_BOX_HEIGHT - total_text_height) // 2
-        )
+        y = TEXT_BOX_Y + ((TEXT_BOX_HEIGHT - total_text_height) // 2)
 
         for line in lines:
 
             bbox = draw.textbbox((0, 0), line, font=font)
             width = bbox[2] - bbox[0]
 
-            x = TEXT_BOX_X + (
-                (TEXT_BOX_WIDTH - width) // 2
-            )
+            x = TEXT_BOX_X + ((TEXT_BOX_WIDTH - width) // 2)
 
+            # shadow
             draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0))
 
+            # main text
             draw.text(
                 (x, y),
                 line,
@@ -613,42 +621,42 @@ def generate_post_image(
             y += line_height
 
         # =====================
-        # CLOUD UPLOAD (BACKUP)
+        # SAVE FILE
         # =====================
 
         filename = f"news_{news_id}.jpg"
         upload_image(final_img, filename)
 
+        public_url = supabase.storage.from_("generated").get_public_url(filename)
+
         # =====================
-        # TELEGRAM SEND (FROM MEMORY)
+        # TELEGRAM SEND (OPTIONAL)
         # =====================
 
-        import io
+        if send_to_telegram:
 
-        buffer = io.BytesIO()
-        rgb_img = final_img.convert("RGB")
+            buffer = io.BytesIO()
+            rgb_img = final_img.convert("RGB")
 
-        rgb_img.save(
-            buffer,
-            format="JPEG",
-            quality=85,
-            optimize=True
-        )
-        buffer.seek(0)
+            rgb_img.save(buffer, format="JPEG", quality=85)
+            buffer.seek(0)
 
-        send_photo(
-            buffer,
-            None,
-            url,
-            category,
-            confidence,
-            content
-        )
+            send_photo(
+                buffer,
+                title,
+                url,
+                category,
+                confidence,
+                content
+            )
 
-        print("🖼️ IMAGE GENERATED + SENT")
+            logger.info("🖼️ IMAGE GENERATED + SENT")
+
+        return public_url
 
     except Exception as e:
-        print(f"❌ IMAGE ERROR: {e}")
+        logger.info(f"❌ IMAGE ERROR: {e}")
+        return None
 
 # =========================
 # EXTRACT NEWS
@@ -745,7 +753,7 @@ def extract_news(
 
         except Exception as e:
 
-            print(
+            logger.info(
                 f"❌ CARD ERROR: {e}"
             )
             
@@ -768,7 +776,7 @@ def save_news(news):
             # =====================
 
             if category is None:
-                print("⚠️ LOW CONFIDENCE NEWS:", item["title"])
+                logger.info(f"⚠️ LOW CONFIDENCE NEWS: {item['title']}")
                 category = "عام"
                 confidence = 0.0
 
@@ -804,32 +812,83 @@ def save_news(news):
                 item.get("content")
             ), fetch=True)
 
-            # duplicate check
+            # =====================
+            # DUPLICATE CHECK
+            # =====================
+
             if not result:
-                print("⚠️ ARTICLE ALREADY EXISTS:", item["title"])
+                logger.info(f"⚠️ ARTICLE ALREADY EXISTS: {item['title']}")
                 continue
 
-            news_id = result[0]
+            news_id = None
 
-            print("\n🟢 NEW ARTICLE")
-            print(f"TITLE: {item['title']}")
+            if isinstance(result, list) and len(result) > 0:
+                news_id = result[0]["id"] if isinstance(result[0], dict) else result[0]
+
+            elif isinstance(result, dict):
+                news_id = result.get("id")
+
+            else:
+                news_id = result
+
+            if not news_id:
+                logger.info("❌ NO NEWS ID RETURNED")
+                continue
+
+            logger.info(f"\n🟢 NEW ARTICLE: {item['title']}")
 
             # =====================
-            # GENERATE IMAGE
+            # IMAGE GENERATION (الأول قبل القائمة)
             # =====================
 
-            generate_post_image(
+            image_url = generate_post_image(
                 item["title"],
                 item["image"],
                 news_id,
                 item["url"],
                 category,
                 confidence,
-                item.get("content")
+                item.get("content"),
+                send_to_telegram=False
             )
 
+            if not image_url:
+                logger.info("❌ IMAGE GENERATION FAILED")
+                continue
+
             # =====================
-            # SAVE TRAINING DATA
+            # QUEUE (بعد الصورة عشان image_url يكون جاهز)
+            # =====================
+
+            article_date = datetime.utcnow()
+
+            if is_within_range(article_date):
+                queue.add_or_update_queue_item({
+                    "article_id": news_id,
+                    "title": item["title"],
+                    "url": item["url"],
+                    "content": item.get("content"),
+                    "image_url": image_url,
+                    "created_at": time.time()
+                })
+
+            # =====================
+            # UPDATE QUEUE IMAGE
+            # =====================
+
+            db_execute("""
+                UPDATE news_queue
+                SET image_url = %s,
+                    generated_image = %s
+                WHERE article_id = %s
+            """, (
+                image_url,
+                f"news_{news_id}.jpg",
+                news_id
+            ))
+
+            # =====================
+            # TRAINING DATA
             # =====================
 
             if confidence >= 0.65 and category != "عام":
@@ -849,7 +908,8 @@ def save_news(news):
                 ))
 
         except Exception as e:
-            print(f"❌ SAVE ERROR: {e}")
+            logger.info(f"❌ SAVE ERROR: {e}")
+            traceback.print_exc()
 # =========================
 # MAIN LOOP
 # =========================
@@ -862,7 +922,7 @@ def run():
 
         try:
 
-            print(
+            logger.info(
                 f"\n🔄 Checking for news... "
                 f"({time.strftime('%H:%M:%S')})"
             )
@@ -882,17 +942,17 @@ def run():
 
                 save_news(news)
 
-                print(
+                logger.info(
                     f"✅ Added {len(news)} articles."
                 )
 
             else:
 
-                print("😴 No new updates.")
+                logger.info("😴 No new updates.")
 
         except requests.exceptions.RequestException as e:
 
-            print(f"🌐 NETWORK ERROR: {e}")
+            logger.info(f"🌐 NETWORK ERROR: {e}")
 
             time.sleep(10)
 
@@ -900,7 +960,7 @@ def run():
 
             
 
-            print(f"⚠️ LOOP ERROR: {e}")
+            logger.info(f"⚠️ LOOP ERROR: {e}")
 
             time.sleep(5)
             
@@ -912,15 +972,30 @@ def run():
 # START
 # =========================
 
+
+
 if __name__ == "__main__":
 
     try:
-        while True:
-            run()
-            time.sleep(60)
+
+        Thread(
+            target=publishing_worker,
+            daemon=True
+        ).start()
+
+        Thread(
+            target=recalculation_worker,
+            daemon=True
+        ).start()
+
+        logger.info("🚀 Workers started")
+
+        run()
 
     except KeyboardInterrupt:
-        print("Stopped manually")
+
+        logger.info("🛑 Stopped manually")
 
     except Exception as e:
-        print("CRASH:", e)
+
+        logger.error(f"CRASH: {e}")
