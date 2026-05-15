@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 
 
-FACEBOOK_START_DATE = datetime(2026, 5, 1)
+FACEBOOK_START_DATE = datetime(2026, 5, 15)
 FACEBOOK_END_DATE = datetime(2026, 5, 30)
 ENABLE_FACEBOOK_POSTING = True  # 👈 toggle only
 
