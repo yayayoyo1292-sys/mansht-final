@@ -49,12 +49,21 @@ def publishing_worker():
 
         if ENABLE_FACEBOOK_POSTING:
 
-            fb.publish(post)
+            success = fb.publish(post)
 
-            db_execute("""
-                UPDATE news_queue
-                SET facebook_status='sent'
-                WHERE id=%s
-            """, (post["id"],))
+            if success:
 
+                db_execute("""
+                    UPDATE news_queue
+                    SET facebook_status='sent'
+                    WHERE id=%s
+                """, (post["id"],))
+
+            else:
+
+                db_execute("""
+                    UPDATE news_queue
+                    SET facebook_status='failed'
+                    WHERE id=%s
+                """, (post["id"],))
         LAST_POST_TIME = now
