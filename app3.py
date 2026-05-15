@@ -1,5 +1,4 @@
 import json
-from fastapi import logger
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -19,13 +18,13 @@ from dotenv import load_dotenv
 from DB.db import get_conn
 from DB.cloud_storage import upload_image
 from services.queue_manager import QueueManager
-from datetime import datetime, timezone
+import time
 from threading import Thread
 from services.scheduler import publishing_worker
 from services.recalculation_worker import recalculation_worker
 from services.date_filter import is_within_range
 from datetime import datetime
-from utils.logger import setup_logger
+from utils.logger import logger
 from tenacity import retry, stop_after_attempt, wait_fixed
 from supabase import create_client
 import traceback
@@ -54,7 +53,7 @@ TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
 # os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-setup_logger()
+
 
 # =========================
 # DATABASE
@@ -138,7 +137,6 @@ TEXT_COLOR = (255, 255, 255)
 
 session = requests.Session()
 session.headers.update(HEADERS)
-
 
 logger.info("🚀 APP STARTED")
 logger.info("📰 WAITING FOR NEWS...")
@@ -701,7 +699,7 @@ def extract_news(
     count = 0
 
     for card in cards:
-
+        count += 1
         if count >= limit:
          
             break
@@ -879,7 +877,7 @@ def save_news(news):
             # QUEUE (بعد الصورة عشان image_url يكون جاهز)
             # =====================
 
-            article_date = datetime.now(time.timezone.utc)
+            article_date = datetime.utcnow()
 
             if is_within_range(article_date):
                 queue.add_or_update_queue_item({
