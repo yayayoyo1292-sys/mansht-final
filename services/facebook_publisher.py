@@ -4,28 +4,18 @@ import requests
 
 class FacebookPublisher:
     def __init__(self):
-        self.page_id = os.getenv("FACEBOOK_PAGE_ID")
-        self.token = os.getenv("FACEBOOK_ACCESS_TOKEN")
+        self.webhook_url = os.getenv("MAKE_WEBHOOK_URL")
 
     def publish(self, post):
-        message = f"""
-📰 {post['title']}
-{post.get('content', '')[:500]}
-"""
-        image_url = post.get("image_url")
-
-        url = f"https://graph.facebook.com/{self.page_id}/photos"
         payload = {
-            "caption": message,
-            "url": image_url,
-            "access_token": self.token
+            "message": f"📰 {post['title']}\n\n{post.get('content', '')[:500]}",
+            "image_url": post.get("image_url")
         }
-
         try:
-            response = requests.post(url, data=payload, timeout=30)
+            response = requests.post(self.webhook_url, json=payload, timeout=30)
             if response.status_code == 200:
-                print("✅ FACEBOOK POST SENT")
+                print("✅ MAKE → FACEBOOK SENT")
             else:
-                print(f"❌ FACEBOOK ERROR: {response.status_code} - {response.text}")
+                print(f"❌ MAKE ERROR: {response.status_code} - {response.text}")
         except Exception as e:
-            print(f"❌ FACEBOOK EXCEPTION: {e}")
+            print(f"❌ MAKE EXCEPTION: {e}")
