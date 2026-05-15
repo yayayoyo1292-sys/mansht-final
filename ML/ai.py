@@ -18,8 +18,7 @@ def normalize_arabic(text):
 # =====================
 # LOAD ML MODEL
 # =====================
-base_dir = "ML"
-
+base_dir = os.path.dirname(os.path.abspath(__file__))
 model = joblib.load(os.path.join(base_dir, "model.pkl"))
 vectorizer = joblib.load(os.path.join(base_dir, "vectorizer.pkl"))
 
