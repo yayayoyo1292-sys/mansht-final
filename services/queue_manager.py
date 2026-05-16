@@ -1,22 +1,23 @@
 import logging
 from typing import Optional
+
 from DB.db import db_execute
 from services.priority_engine import calculate_final_score
- 
+
 logger = logging.getLogger(__name__)
- 
- 
+
+
 class QueueManager:
- 
+
     def add_or_update_queue_item(self, article: dict) -> None:
-        """Insert a new queue item or update scores if the URL already exists."""
- 
+        """Insert a new queue item or refresh its scores if the URL already exists."""
+
         scores = calculate_final_score(
             article["title"],
             article.get("content") or "",
             article["created_at"],
         )
- 
+
         db_execute(
             """
             INSERT INTO news_queue (
@@ -51,18 +52,18 @@ class QueueManager:
                 article["created_at"],
                 scores["keyword_score"],
                 scores["aging_score"],
-                scores["ai_score"],          # was hardcoded 0 — now uses real value
+                scores["ai_score"],      # was hardcoded 0 — now correct
                 scores["final_score"],
             ),
         )
- 
+
         logger.debug(
             f"Queued article_id={article['article_id']} "
             f"score={scores['final_score']:.2f}"
         )
- 
+
     def reorder_queue(self) -> None:
-        """Recompute final_score for all pending rows (aging component changes over time)."""
+        """Recompute final_score for all pending rows."""
         db_execute(
             """
             UPDATE news_queue
@@ -70,24 +71,17 @@ class QueueManager:
             WHERE status = 'pending'
             """
         )
- 
-    def get_next_post(self) -> "Optional[dict]":
-        """
-        Return the highest-priority pending item, or None if the queue is empty.
- 
-        Returns a RealDictRow (behaves like a dict) or None.
-        """
+
+    def get_next_post(self) -> Optional[dict]:
+        """Return the highest-priority pending item, or None if empty."""
         result = db_execute(
             """
             SELECT *
             FROM news_queue
             WHERE status = 'pending'
-            ORDER BY
-                final_score DESC,
-                created_at  ASC
+            ORDER BY final_score DESC, created_at ASC
             LIMIT 1
             """,
             fetch=True,
         )
-        # db_execute with fetch=True returns fetchone() → dict | None
         return result if result else None
