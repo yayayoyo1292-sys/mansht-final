@@ -1,31 +1,3 @@
-"""
-services/instant_publisher.py
-──────────────────────────────
-Priority Instant Publishing Engine
-====================================
-
-Provides two public helpers used by scraper/save_news.py:
-
-    is_priority_article(title, content) -> bool
-        Returns True if the article matches any INSTANT_PUBLISH_KEYWORDS phrase.
-        Matching is FULL EXACT PHRASE only (no partial / single-word hits).
-
-    instant_publish(post, priority_tg_publisher, fb_publisher) -> None
-        Publishes the article immediately to Telegram (and optionally Facebook),
-        then marks the news_queue row as 'published' so the normal queue worker
-        does NOT re-publish it.
-
-Design notes
-────────────
-• Arabic Unicode is normalised (NFKC) before matching so that visually-identical
-  characters in different encodings still compare equal.
-• The duplicate-prevention contract is simple: save_news.py inserts the queue row
-  first, then calls instant_publish().  instant_publish() always sets
-  status='published' in the same DB transaction, so the queue worker (scheduler.py)
-  which filters WHERE status='pending' will never see the row again.
-• All priority-publish events are logged at INFO level with a distinctive
-  🚨 PRIORITY prefix so they are easy to grep in production logs.
-"""
 
 import logging
 import unicodedata
