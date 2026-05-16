@@ -5,7 +5,7 @@ from urllib.parse import urljoin
 import time
 import re
 import random
-import os , io
+import os, io
 import unicodedata
 from DB.db import db_execute
 from io import BytesIO
@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 from DB.db import get_conn
 from DB.cloud_storage import upload_image
 from services.queue_manager import QueueManager
-import time
 from threading import Thread
 from services.scheduler import publishing_worker
 from services.recalculation_worker import recalculation_worker
@@ -28,10 +27,10 @@ from utils.logger import logger
 from tenacity import retry, stop_after_attempt, wait_fixed
 from supabase import create_client
 import traceback
+
 # =========================
 # LOAD ENV
 # =========================
-queue = QueueManager()
 
 load_dotenv()
 
@@ -40,7 +39,16 @@ CHAT_ID = os.getenv("CHAT_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+if not all([TOKEN, CHAT_ID, SUPABASE_URL, SUPABASE_KEY]):
+    raise RuntimeError(
+        "Missing required environment variables: "
+        "TOKEN, CHAT_ID, SUPABASE_URL, SUPABASE_KEY"
+    )
+
+supabase = create_client(str(SUPABASE_URL), str(SUPABASE_KEY))
+
+queue = QueueManager()
+
 # =========================
 # PATHS
 # =========================
@@ -49,15 +57,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
-# OUTPUT_FOLDER = "generated"
-
-# os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
-
-
-# =========================
-# DATABASE
-# =========================
+FONT_PATH = os.path.join(BASE_DIR, "Cairo-Black.ttf")
 
 
 # =========================
@@ -124,8 +124,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
 
-FONT_PATH = "Cairo-Black.ttf"
-
 MAX_FONT_SIZE = 60
 MIN_FONT_SIZE = 26
 
@@ -148,6 +146,23 @@ logger.info("📰 WAITING FOR NEWS...")
 def clean_text(text):
     return unicodedata.normalize("NFKC", str(text or ""))
 
+
+# FIX: wrapped with retry so network errors on homepage fetch are retried
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_fixed(5)
+)
+def _get_html_with_retry():
+    response = session.get(BASE_URL, timeout=(10, 30))
+    response.raise_for_status()
+    return response.text
+
+
+def get_html():
+    return _get_html_with_retry()
+
+
+# FIX: send_photo now re-raises exceptions so tenacity can actually retry
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_fixed(5)
@@ -206,7 +221,7 @@ def send_photo(photo_file, title, url, category, confidence, content):
             file_to_send = photo_file
             file_to_send.seek(0)
 
-        requests.post(
+        resp = requests.post(
             api_url,
             data={
                 "chat_id": CHAT_ID,
@@ -220,23 +235,18 @@ def send_photo(photo_file, title, url, category, confidence, content):
             timeout=30
         )
 
+        # FIX: raise on HTTP errors so tenacity retries on 4xx/5xx
+        resp.raise_for_status()
+
         logger.info("✅ SENT TO TELEGRAM")
 
     except Exception as e:
-        logger.info("❌ TELEGRAM ERROR:", e)
+        logger.error(f"❌ TELEGRAM ERROR: {e}")
+        raise  # FIX: re-raise so tenacity actually retries
 
     finally:
         if file_to_close:
             file_to_close.close()
-        
-
-def get_html():
-
-    response = session.get(BASE_URL, timeout=(10, 30) )
-
-    response.raise_for_status()
-
-    return response.text
 
 
 def news_exists(url):
@@ -245,7 +255,8 @@ def news_exists(url):
         (url,),
         fetch=True
     )
-    return result is not None and len(result) > 0
+    return bool(result)
+
 
 def clean_image_url(src):
 
@@ -319,10 +330,9 @@ def fetch_article_content(url, max_words=100):
 
     except Exception as e:
 
-        logger.info("❌ ARTICLE CONTENT ERROR:", e)
-        
-        return None
+        logger.warning(f"❌ ARTICLE CONTENT ERROR: {e}")
 
+        return None
 
 
 # =========================
@@ -397,10 +407,6 @@ def fit_text(
     max_height
 ):
 
-    best_font = None
-    best_lines = None
-    best_line_height = None
-
     for size in range(
         MAX_FONT_SIZE,
         MIN_FONT_SIZE - 1,
@@ -447,17 +453,14 @@ def fit_text(
             longest_line <= max_width
         ):
 
-            best_font = font
-            best_lines = lines
-            best_line_height = line_height
+            return (
+                font,
+                lines,
+                line_height
+            )
 
-            break
+    return (None, None, None)
 
-    return (
-        best_font,
-        best_lines,
-        best_line_height
-    )
 
 def generate_post_image(
     title,
@@ -471,7 +474,6 @@ def generate_post_image(
 ):
 
     logger.info(f"CATEGORY DEBUG: {category}")
-    logger.info(f"AVAILABLE KEYS: {list(TEMPLATE_CONFIG.keys())}")
 
     try:
 
@@ -482,7 +484,7 @@ def generate_post_image(
         config = TEMPLATE_CONFIG.get(category)
 
         if config is None:
-            logger.info(f"⚠️ Unknown category: {category} → fallback to عام")
+            logger.warning(f"⚠️ Unknown category: {category} → fallback to عام")
             config = TEMPLATE_CONFIG["عام"]
 
         image_x1, image_y1, image_x2, image_y2 = config["image_box"]
@@ -493,13 +495,12 @@ def generate_post_image(
         TEXT_BOX_WIDTH = text_x2 - text_x1
         TEXT_BOX_HEIGHT = text_y2 - text_y1
 
-        
         # =====================
         # LOAD TEMPLATE
         # =====================
         template_path = config.get("template")
         if not template_path or not os.path.exists(template_path):
-            logger.info(f"❌ TEMPLATE NOT FOUND: {template_path}")
+            logger.error(f"❌ TEMPLATE NOT FOUND: {template_path}")
             return None
         template = Image.open(template_path).convert("RGBA")
 
@@ -515,7 +516,7 @@ def generate_post_image(
                     BytesIO(response.content)
                 ).convert("RGBA")
             except Exception as e:
-                logger.info(f"❌ IMAGE DOWNLOAD ERROR: {e}")
+                logger.warning(f"❌ IMAGE DOWNLOAD ERROR: {e}")
                 news_img = None
 
         # =====================
@@ -542,7 +543,7 @@ def generate_post_image(
                 bg_w = box_w
                 bg_h = int(box_w / img_ratio)
 
-            bg = news_img.resize((bg_w, bg_h), Image.LANCZOS).convert("RGBA")
+            bg = news_img.resize((bg_w, bg_h), Image.Resampling.LANCZOS).convert("RGBA")
 
             # crop من المنتصف عشان يملأ الـ box بالظبط
             bg_crop_x = (bg_w - box_w) // 2
@@ -564,7 +565,7 @@ def generate_post_image(
                 fg_h = box_h
                 fg_w = int(box_h * img_ratio)
 
-            fg = news_img.resize((fg_w, fg_h), Image.LANCZOS).convert("RGBA")
+            fg = news_img.resize((fg_w, fg_h), Image.Resampling.LANCZOS).convert("RGBA")
 
             # توسيط الـ fg فوق الـ bg
             fg_x = (box_w - fg_w) // 2
@@ -595,19 +596,21 @@ def generate_post_image(
 
         draw = ImageDraw.Draw(final_img)
 
-        title = prepare_ar_text(clean_text(title))
+        ar_title = prepare_ar_text(clean_text(title))
 
         font, lines, line_height = fit_text(
             draw,
-            title,
+            ar_title,
             FONT_PATH,
             TEXT_BOX_WIDTH,
             TEXT_BOX_HEIGHT
         )
 
         if not font:
-            logger.info("❌ FONT FIT ERROR")
+            logger.error("❌ FONT FIT ERROR — text too long for any supported size")
             return None
+
+        assert lines is not None and line_height is not None
 
         lines.reverse()
 
@@ -664,7 +667,7 @@ def generate_post_image(
                 url,
                 category,
                 confidence,
-                content
+                content or ""
             )
 
             logger.info("🖼️ IMAGE GENERATED + SENT")
@@ -672,8 +675,10 @@ def generate_post_image(
         return public_url
 
     except Exception as e:
-        logger.info(f"❌ IMAGE ERROR: {e}")
+        logger.error(f"❌ IMAGE ERROR: {e}")
+        traceback.print_exc()
         return None
+
 
 # =========================
 # EXTRACT NEWS
@@ -696,12 +701,12 @@ def extract_news(
         class_="item-card"
     )
 
-    count = 0
-
+    # FIX: removed double-increment bug — original code incremented `count`
+    # once before the try block AND once inside it, so real limit was ~limit/2.
+    # Now we simply check len(news_list) against the limit.
     for card in cards:
-        count += 1
-        if count >= limit:
-         
+
+        if len(news_list) >= limit:
             break
 
         try:
@@ -713,7 +718,7 @@ def extract_news(
 
             url = urljoin(
                 BASE_URL,
-                a_tag.get("href")
+                str(a_tag.get("href") or "")
             )
 
             # 🔥 PostgreSQL-safe duplicate check
@@ -762,20 +767,18 @@ def extract_news(
 
                 "image": final_image,
 
-                "content": clean_text(content)
+                "content": clean_text(content) if content else None
 
             })
 
-            count += 1
-
         except Exception as e:
 
-            logger.info(
+            logger.error(
                 f"❌ CARD ERROR: {e}"
             )
-            
 
     return news_list
+
 
 def save_news(news):
 
@@ -793,7 +796,7 @@ def save_news(news):
             # =====================
 
             if category is None:
-                logger.info(f"⚠️ LOW CONFIDENCE NEWS: {item['title']}")
+                logger.warning(f"⚠️ LOW CONFIDENCE NEWS: {item['title']}")
                 category = "عام"
                 confidence = 0.0
 
@@ -834,22 +837,15 @@ def save_news(news):
             # =====================
 
             if not result:
-                logger.info(f"⚠️ ARTICLE ALREADY EXISTS: {item['title']}")
+                logger.warning(f"⚠️ ARTICLE ALREADY EXISTS: {item['title']}")
                 continue
 
-            news_id = None
-
-            if isinstance(result, list) and len(result) > 0:
-                news_id = result[0]["id"] if isinstance(result[0], dict) else result[0]
-
-            elif isinstance(result, dict):
-                news_id = result.get("id")
-
-            else:
-                news_id = result
+            # FIX: simplified id extraction — db_execute with fetch=True returns
+            # a RealDictRow (dict-like), so result["id"] is always correct.
+            news_id = result["id"] if isinstance(result, dict) else result[0]
 
             if not news_id:
-                logger.info("❌ NO NEWS ID RETURNED")
+                logger.error("❌ NO NEWS ID RETURNED")
                 continue
 
             logger.info(f"\n🟢 NEW ARTICLE: {item['title']}")
@@ -870,7 +866,7 @@ def save_news(news):
             )
 
             if not image_url:
-                logger.info("❌ IMAGE GENERATION FAILED")
+                logger.error("❌ IMAGE GENERATION FAILED")
                 continue
 
             # =====================
@@ -925,8 +921,10 @@ def save_news(news):
                 ))
 
         except Exception as e:
-            logger.info(f"❌ SAVE ERROR: {e}")
+            logger.error(f"❌ SAVE ERROR: {e}")
             traceback.print_exc()
+
+
 # =========================
 # MAIN LOOP
 # =========================
@@ -967,29 +965,28 @@ def run():
 
                 logger.info("😴 No new updates.")
 
+            time.sleep(random.randint(60, 120))
+
         except requests.exceptions.RequestException as e:
 
-            logger.info(f"🌐 NETWORK ERROR: {e}")
+            logger.error(f"🌐 NETWORK ERROR: {e}")
 
             time.sleep(10)
 
+            # FIX: continue to skip the outer sleep after a network error,
+            # so the bot retries sooner instead of sleeping an extra 60-120 s
+            continue
+
         except Exception as e:
 
-            
-
-            logger.info(f"⚠️ LOOP ERROR: {e}")
+            logger.error(f"⚠️ LOOP ERROR: {e}")
 
             time.sleep(5)
-            
-
-        time.sleep(random.randint(60, 120))
 
 
 # =========================
 # START
 # =========================
-
-
 
 if __name__ == "__main__":
 
@@ -1016,3 +1013,4 @@ if __name__ == "__main__":
     except Exception as e:
 
         logger.error(f"CRASH: {e}")
+        raise
