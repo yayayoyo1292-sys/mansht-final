@@ -1,18 +1,17 @@
 
-
 import os
 from datetime import datetime
 
-# ── Publishing window ────────────────────────────────────────────────────────
-FACEBOOK_START_DATE = datetime(2026, 5, 15)
-FACEBOOK_END_DATE = datetime(2026, 5, 30)
+# ── Publishing window ─────────────────────────────────────────────────────────
+FACEBOOK_START_DATE    = datetime(2026, 5, 15)
+FACEBOOK_END_DATE      = datetime(2026, 5, 30)
 ENABLE_FACEBOOK_POSTING = True
 
-# ── Scraper poll cadence (seconds) ──────────────────────────────────────────
+# ── Scraper poll cadence (seconds) ────────────────────────────────────────────
 SCRAPE_INTERVAL_MIN = 60
 SCRAPE_INTERVAL_MAX = 120
 
-# ── Priority scoring ─────────────────────────────────────────────────────────
+# ── Priority scoring ──────────────────────────────────────────────────────────
 AGING_MULTIPLIER = 0.12   # points per minute a pending article has been waiting
 
 KEYWORD_PRIORITY = {
