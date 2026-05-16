@@ -5,10 +5,15 @@ from datetime import datetime
 from DB.db import db_execute
 from ML.ai import classify_news
 from services.date_filter import is_within_range
+from services.instant_publisher import is_priority_article, instant_publish
+from services.priority_telegram_publisher import PriorityTelegramPublisher
+from services.facebook_publisher import FacebookPublisher
 from services.queue_manager import QueueManager
 from utils.logger import logger
 
-queue = QueueManager()
+queue        = QueueManager()
+_priority_tg = PriorityTelegramPublisher()
+_fb          = FacebookPublisher()
 
 
 def save_news(
@@ -97,6 +102,30 @@ def save_news(
                     "image_url":  image_url,
                     "created_at": time.time(),
                 })
+
+                # ── Priority instant-publish check ────────────────────────────
+                # If the article matches any priority keyword, fetch the freshly
+                # inserted queue row and publish it immediately, bypassing the
+                # normal scheduler loop entirely.
+                if is_priority_article(item["title"], item.get("content")):
+                    queue_row = db_execute(
+                        """
+                        SELECT *
+                        FROM news_queue
+                        WHERE article_id = %s
+                          AND status = 'pending'
+                        LIMIT 1
+                        """,
+                        (news_id,),
+                        fetch=True,
+                    )
+                    if queue_row:
+                        instant_publish(queue_row, _priority_tg, _fb)
+                    else:
+                        logger.warning(
+                            f"🚨 Priority article has no pending queue row "
+                            f"| article_id={news_id} | '{item['title'][:60]}'"
+                        )
 
             # Keep generated_image column in sync
             db_execute(
