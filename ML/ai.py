@@ -118,7 +118,8 @@ def classify_news(title, content=None):
             if kw in title:
                 scores[cat] += 1
 
-    best = max(scores, key=scores.get)
+    # pick the category with highest score; use items() to avoid typing issues with static checkers
+    best = max(scores.items(), key=lambda kv: kv[1])[0]
     score = scores[best]
 
     if score >= 1:                              
