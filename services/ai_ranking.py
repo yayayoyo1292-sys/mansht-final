@@ -1,22 +1,16 @@
-import re
-
-
 IMPORTANT_ENTITIES = [
     "محمد بن زايد",
     "محمد بن راشد",
     "ولي عهد",
-    "الإمارات"
+    "الإمارات",
 ]
 
 
-def calculate_ai_score(title, content=""):
-
-    text = f"{title} {content}"
-
+def calculate_ai_score(title: str, content: str = "") -> int:
+    text  = f"{title} {content}"
     score = 0
 
     for entity in IMPORTANT_ENTITIES:
-
         if entity in text:
             score += 3
 
