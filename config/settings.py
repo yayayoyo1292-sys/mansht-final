@@ -1,14 +1,19 @@
+
+
 import os
 from datetime import datetime
 
-
+# ── Publishing window ────────────────────────────────────────────────────────
 FACEBOOK_START_DATE = datetime(2026, 5, 15)
 FACEBOOK_END_DATE = datetime(2026, 5, 30)
-ENABLE_FACEBOOK_POSTING = True  # 👈 toggle only
+ENABLE_FACEBOOK_POSTING = True
 
-AGING_MULTIPLIER = 0.12  # configurable 0.08 - 0.15
+# ── Scraper poll cadence (seconds) ──────────────────────────────────────────
+SCRAPE_INTERVAL_MIN = 60
+SCRAPE_INTERVAL_MAX = 120
 
-POST_INTERVAL_MINUTES = 1
+# ── Priority scoring ─────────────────────────────────────────────────────────
+AGING_MULTIPLIER = 0.12   # points per minute a pending article has been waiting
 
 KEYWORD_PRIORITY = {
     20: ["محمد بن زايد آل نهيان"],
@@ -22,5 +27,5 @@ KEYWORD_PRIORITY = {
     12: ["عمر بن زايد آل نهيان", "نهيان بن زايد آل نهيان", "سلطان بن زايد آل نهيان", "راشد بن سعود القاسمي"],
     11: ["رئيس", "رئيس الدولة"],
     10: ["حاكم", "ولي عهد"],
-    9: ["الإمارات"]
+    9:  ["الإمارات"],
 }
