@@ -16,17 +16,12 @@ _SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 if not _SUPABASE_URL or not _SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in the environment")
 
-_supabase = create_client(_SUPABASE_URL, _SUPABASE_KEY)
+_supabase = create_client(str(_SUPABASE_URL), str(_SUPABASE_KEY))
 
 
 def upload_image(image, filename: str) -> bool:
-    """
-    Upload *image* (PIL Image) to the 'generated' Supabase Storage bucket.
-
-    Returns True on success, False on failure.
-    """
-    # JPEG does not support alpha channel
-    image = image.convert("RGB")
+    """Upload a PIL Image to the 'generated' Supabase bucket. Returns True on success."""
+    image    = image.convert("RGB")
     filename = filename.replace(".png", ".jpg")
 
     buffer = io.BytesIO()
@@ -34,7 +29,7 @@ def upload_image(image, filename: str) -> bool:
     buffer.seek(0)
 
     size_mb = len(buffer.getvalue()) / (1024 * 1024)
-    logger.info(f"🖼️  Uploading image: {filename} ({size_mb:.2f} MB)")
+    logger.info(f"🖼️  Uploading {filename} ({size_mb:.2f} MB)")
 
     try:
         result = _supabase.storage.from_("generated").upload(
