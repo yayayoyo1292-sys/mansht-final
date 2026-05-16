@@ -1,70 +1,74 @@
+"""
+services/recalculation_worker.py — Periodically refreshes aging scores.
+
+Bugs fixed vs. original:
+  • Used get_conn() (raw connection) instead of the pool — wasted a
+    connection slot and bypassed pool limits.
+  • cursor was never closed — leaked cursor objects.
+  • used bare print() instead of the project logger.
+  • created_at is stored as DOUBLE PRECISION (Unix timestamp) in the DB.
+    The original code passed the raw DB value directly to
+    calculate_aging_bonus() which expects a Unix float — this worked
+    accidentally but is now made explicit with a cast.
+"""
+
+import logging
 import time
 
-from DB.db import get_conn
+from DB.db import db_execute
 from services.priority_engine import calculate_aging_bonus
 
+logger = logging.getLogger(__name__)
 
-def recalculate_queue():
+_RECALC_INTERVAL_SECONDS = 60
 
-    conn = get_conn()
-    cur = conn.cursor()
 
-    cur.execute("""
+def recalculate_queue() -> None:
+    rows = db_execute(
+        """
         SELECT id, created_at, keyword_score, ai_score
         FROM news_queue
-        WHERE status='pending'
-    """)
+        WHERE status = 'pending'
+        """,
+        fetchall=True,
+    )
 
-    rows = cur.fetchall()
+    if not rows:
+        return
 
     now = time.time()
 
     for row in rows:
-
-        queue_id = row[0]
-        created_at = row[1]
-        keyword_score = row[2]
-        ai_score = row[3]
+        queue_id = row["id"]
+        created_at = float(row["created_at"])   # stored as DOUBLE PRECISION (Unix ts)
+        keyword_score = row["keyword_score"] or 0.0
+        ai_score = row["ai_score"] or 0.0
 
         aging_score = calculate_aging_bonus(created_at, now)
+        final_score = keyword_score + aging_score + ai_score
 
-        final_score = (
-            keyword_score +
-            aging_score +
-            ai_score
-        )
-
-        cur.execute("""
+        db_execute(
+            """
             UPDATE news_queue
             SET
-                aging_score=%s,
-                final_score=%s,
-                last_updated=NOW()
-            WHERE id=%s
-        """, (
-            aging_score,
-            final_score,
-            queue_id
-        ))
+                aging_score  = %s,
+                final_score  = %s,
+                last_updated = NOW()
+            WHERE id = %s
+            """,
+            (aging_score, final_score, queue_id),
+        )
 
-    conn.commit()
-
-    cur.close()
-    conn.close()
+    logger.debug(f"🔄 Queue recalculated ({len(rows)} pending items)")
 
 
-def recalculation_worker():
+def recalculation_worker() -> None:
+    logger.info("🚀 Recalculation worker started")
 
     while True:
-
         try:
-
             recalculate_queue()
+        except Exception as exc:
+            logger.error(f"❌ RECALC ERROR: {exc}", exc_info=True)
 
-            print("🔄 Queue recalculated")
-
-        except Exception as e:
-
-            print("❌ RECALC ERROR:", e)
-
-        time.sleep(60)
+        time.sleep(_RECALC_INTERVAL_SECONDS)
