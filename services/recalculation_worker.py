@@ -1,4 +1,3 @@
-
 import logging
 import time
 
@@ -7,7 +6,7 @@ from services.priority_engine import calculate_aging_bonus
 
 logger = logging.getLogger(__name__)
 
-_RECALC_INTERVAL_SECONDS = 60
+_INTERVAL_SECONDS = 60
 
 
 def recalculate_queue() -> None:
@@ -26,10 +25,10 @@ def recalculate_queue() -> None:
     now = time.time()
 
     for row in rows:
-        queue_id = row["id"]
-        created_at = float(row["created_at"])   # stored as DOUBLE PRECISION (Unix ts)
+        queue_id     = row["id"]
+        created_at   = float(row["created_at"])
         keyword_score = row["keyword_score"] or 0.0
-        ai_score = row["ai_score"] or 0.0
+        ai_score      = row["ai_score"]      or 0.0
 
         aging_score = calculate_aging_bonus(created_at, now)
         final_score = keyword_score + aging_score + ai_score
@@ -37,8 +36,7 @@ def recalculate_queue() -> None:
         db_execute(
             """
             UPDATE news_queue
-            SET
-                aging_score  = %s,
+            SET aging_score  = %s,
                 final_score  = %s,
                 last_updated = NOW()
             WHERE id = %s
@@ -56,6 +54,6 @@ def recalculation_worker() -> None:
         try:
             recalculate_queue()
         except Exception as exc:
-            logger.error(f"❌ RECALC ERROR: {exc}", exc_info=True)
+            logger.error(f"❌ Recalc error: {exc}", exc_info=True)
 
-        time.sleep(_RECALC_INTERVAL_SECONDS)
+        time.sleep(_INTERVAL_SECONDS)
