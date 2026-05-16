@@ -1,45 +1,49 @@
+
 import io
+import logging
 import os
+
+from dotenv import load_dotenv
 from supabase import create_client
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+load_dotenv()
 
-supabase = create_client(
-    SUPABASE_URL,
-    SUPABASE_KEY
-)
+logger = logging.getLogger(__name__)
+
+_SUPABASE_URL = os.getenv("SUPABASE_URL")
+_SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+if not _SUPABASE_URL or not _SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in the environment")
+
+_supabase = create_client(_SUPABASE_URL, _SUPABASE_KEY)
 
 
-def upload_image(image, filename):
+def upload_image(image, filename: str) -> bool:
+    """
+    Upload *image* (PIL Image) to the 'generated' Supabase Storage bucket.
 
-    # JPEG doesn't support alpha
+    Returns True on success, False on failure.
+    """
+    # JPEG does not support alpha channel
     image = image.convert("RGB")
-
-    # force jpg extension
     filename = filename.replace(".png", ".jpg")
 
     buffer = io.BytesIO()
-
-    image.save(
-        buffer,
-        format="JPEG",
-        quality=85,
-        optimize=True
-    )
-
+    image.save(buffer, format="JPEG", quality=85, optimize=True)
     buffer.seek(0)
 
     size_mb = len(buffer.getvalue()) / (1024 * 1024)
+    logger.info(f"🖼️  Uploading image: {filename} ({size_mb:.2f} MB)")
 
-    print(f"🖼️ Uploading image: {size_mb:.2f} MB")
-
-    result = supabase.storage.from_("generated").upload(
-        path=filename,
-        file=buffer.read(),
-        file_options={
-            "content-type": "image/jpeg"
-        }
-    )
-
-    print("✅ Upload Result:", result)
+    try:
+        result = _supabase.storage.from_("generated").upload(
+            path=filename,
+            file=buffer.read(),
+            file_options={"content-type": "image/jpeg"},
+        )
+        logger.debug(f"✅ Upload result: {result}")
+        return True
+    except Exception as exc:
+        logger.error(f"❌ Upload failed for {filename}: {exc}")
+        return False
