@@ -1,16 +1,3 @@
-"""
-services/recalculation_worker.py — Periodically refreshes aging scores.
-
-Bugs fixed vs. original:
-  • Used get_conn() (raw connection) instead of the pool — wasted a
-    connection slot and bypassed pool limits.
-  • cursor was never closed — leaked cursor objects.
-  • used bare print() instead of the project logger.
-  • created_at is stored as DOUBLE PRECISION (Unix timestamp) in the DB.
-    The original code passed the raw DB value directly to
-    calculate_aging_bonus() which expects a Unix float — this worked
-    accidentally but is now made explicit with a cast.
-"""
 
 import logging
 import time
