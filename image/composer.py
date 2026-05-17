@@ -13,9 +13,9 @@ from utils.logger import logger
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _FONT_CANDIDATES = [
-    os.path.join(_BASE_DIR, "Cairo-Black.ttf"),   # original fallback
     os.path.join(_BASE_DIR, "Cairo-ExtraBold.ttf"),
     os.path.join(_BASE_DIR, "Cairo-Bold.ttf"),
+    os.path.join(_BASE_DIR, "Cairo-Black.ttf"),   # original fallback
 ]
 
 FONT_PATH: str = next((p for p in _FONT_CANDIDATES if os.path.exists(p)), "")
