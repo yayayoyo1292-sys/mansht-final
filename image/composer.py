@@ -13,9 +13,9 @@ from utils.logger import logger
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _FONT_CANDIDATES = [
+    os.path.join(_BASE_DIR, "Cairo-Black.ttf"),   # original fallback
     os.path.join(_BASE_DIR, "Cairo-ExtraBold.ttf"),
     os.path.join(_BASE_DIR, "Cairo-Bold.ttf"),
-    os.path.join(_BASE_DIR, "Cairo-Black.ttf"),   # original fallback
 ]
 
 FONT_PATH: str = next((p for p in _FONT_CANDIDATES if os.path.exists(p)), "")
@@ -119,7 +119,7 @@ def _draw_title(
         # Drop shadow
         draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0))
         # Main text (bold stroke gives extra weight on top of the Bold font)
-        draw.text((x, y), line, font=font, fill=TEXT_COLOR, stroke_width=1, stroke_fill=TEXT_COLOR)
+        draw.text((x, y), line, font=font, fill=TEXT_COLOR, stroke_width=3, stroke_fill=TEXT_COLOR)
 
         y += line_height
 
