@@ -11,16 +11,21 @@ _ALL_QUOTES   = _OPEN_QUOTES | _CLOSE_QUOTES
 # These multi-word Arabic names must NEVER be broken across lines.
 # Sorted longest-first so overlapping phrases match correctly.
 PROTECTED_NAMES: list = sorted([
+    # UAE leadership
+    "محمد بن زايد آل نهيان",
+    "خالد بن محمد بن زايد",
+    "حمدان بن محمد بن زايد",
+    "أحمد بن محمد بن راشد",
+    "منصور بن محمد بن راشد",
+    "ذياب بن محمد بن زايد",
     "محمد بن راشد",
     "منصور بن زايد",
-    "خالد بن محمد بن زايد",
     "حمدان بن محمد",
     "سيف بن زايد",
     "عبدالله بن زايد",
     "طحنون بن زايد",
     "هزاع بن زايد",
     "حمدان بن زايد",
-    "أحمد بن محمد بن راشد",
     "سلطان القاسمي",
     "عمر بن زايد",
     "حميد بن راشد",
@@ -29,12 +34,19 @@ PROTECTED_NAMES: list = sorted([
     "حمد الشرقي",
     "سلطان بن زايد",
     "نهيان بن زايد",
-    "ذياب بن محمد بن زايد",
-    "حمدان بن محمد بن زايد",
-    "منصور بن محمد بن راشد",
     "محمد بن زايد",
     "رئيس الدولة",
     "ولي عهد",
+    # Arab League / regional figures
+    "أبو الغيط",
+    "أبوالغيط",
+    # Common two-word titles that must stay together
+    "بن مكتوم",
+    "بن راشد",
+    "بن زايد",
+    "بن محمد",
+    "آل نهيان",
+    "آل مكتوم",
 ], key=lambda s: -len(s))
 
 # Non-breaking space — glues words of a protected name into one token
@@ -46,7 +58,8 @@ def _protect_names(text: str) -> str:
     Replace ordinary spaces inside protected names with non-breaking spaces
     so the entire name stays on a single line during wrapping.
 
-        "هزاع بن زايد يقول"  →  "هزاع\\u00a0بن\\u00a0زايد يقول"
+        "هزاع بن زايد يقول"  →  "هزاع\u00a0بن\u00a0زايد يقول"
+        "أبو الغيط يدين"     →  "أبو\u00a0الغيط يدين"
     """
     for name in PROTECTED_NAMES:
         protected = name.replace(" ", _NBSP)
@@ -107,9 +120,12 @@ def wrap_text(draw, text: str, font, max_width: int) -> list[str]:
     """
     Wrap *text* into lines that fit within *max_width* pixels.
 
-    Quoted phrases are kept on the same line — they are never broken.
-    If a single quoted phrase is wider than max_width it still stays on
-    one line (the design box controls the font-size reduction via fit_text).
+    Rules:
+    • Quoted phrases stay on one line (never broken).
+    • Protected names (joined with NBSP) stay on one line.
+    • Orphan prevention: if the first line has only ONE token, it is merged
+      with the second line so a name like "أبو الغيط" never splits as
+      "أبو" alone on line 1.
     """
     tokens = _tokenize(text)
     lines: list[str] = []
@@ -129,6 +145,16 @@ def wrap_text(draw, text: str, font, max_width: int) -> list[str]:
 
     if current:
         lines.append(current)
+
+    # ── Orphan prevention ────────────────────────────────────────────────────
+    # If the first line is a single short token (≤ 6 chars) AND there's a
+    # second line, merge them. This keeps "أبو الغيط" together even when the
+    # wrapping algorithm would otherwise leave "أبو" alone on line 1.
+    if len(lines) >= 2:
+        first_tokens = _tokenize(lines[0])
+        if len(first_tokens) == 1 and len(lines[0].replace(_NBSP, "")) <= 8:
+            merged = lines[0] + " " + lines[1]
+            lines = [merged] + lines[2:]
 
     return lines
 
