@@ -73,15 +73,53 @@ class QueueManager:
         )
 
     def get_next_post(self) -> Optional[dict]:
-        """Return the highest-priority pending item, or None if empty."""
-        result = db_execute(
-            """
-            SELECT *
-            FROM news_queue
-            WHERE status = 'pending'
-            ORDER BY final_score DESC, created_at ASC
-            LIMIT 1
-            """,
-            fetch=True,
-        )
-        return result if result else None
+        """
+        Return the highest-priority pending item and atomically claim it,
+        or None if the queue is empty.
+
+        Uses SELECT … FOR UPDATE SKIP LOCKED inside an explicit transaction
+        so that concurrent callers (publishing_worker thread vs instant_publish
+        on the scraper thread) can never both grab the same row.
+
+        The row is immediately flipped to status='processing' inside the same
+        transaction, which makes it invisible to any other caller before this
+        function even returns.
+        """
+        import psycopg2
+        import os
+        from psycopg2.extras import RealDictCursor
+
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            conn.autocommit = False
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM news_queue
+                    WHERE status = 'pending'
+                    ORDER BY final_score DESC, created_at ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                    """
+                )
+                row = cur.fetchone()
+                if not row:
+                    conn.rollback()
+                    return None
+
+                cur.execute(
+                    """
+                    UPDATE news_queue
+                    SET status = 'processing', last_updated = NOW()
+                    WHERE id = %s
+                    """,
+                    (row["id"],),
+                )
+            conn.commit()
+            return dict(row)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
