@@ -1,6 +1,7 @@
 
 import logging
 import unicodedata
+from typing import Optional
 
 from config.settings import INSTANT_PUBLISH_KEYWORDS, ENABLE_FACEBOOK_POSTING
 from DB.db import db_execute
@@ -15,7 +16,7 @@ def _normalise(text: str) -> str:
     return unicodedata.normalize("NFKC", text or "")
 
 
-def _build_search_text(title: str, content: str | None) -> str:
+def _build_search_text(title: str, content: Optional[str]) -> str:
     """Combine title + content into a single normalised string for matching."""
     parts = [_normalise(title)]
     if content:
@@ -25,36 +26,57 @@ def _build_search_text(title: str, content: str | None) -> str:
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
-def is_priority_article(title: str, content: str | None = None) -> bool:
+def is_priority_article(title: str, content: Optional[str] = None) -> bool:
     """
-    Return True when *title* or *content* contains any phrase from
-    INSTANT_PUBLISH_KEYWORDS as an exact, whole-phrase match.
+    Return True when *title* contains any phrase from INSTANT_PUBLISH_KEYWORDS
+    as an exact, whole-phrase match.
 
-    Rules enforced here:
-    ✓  Full phrase match only  (e.g. "منصور بن محمد بن راشد" must appear verbatim)
-    ✗  Single-word / partial hits are NOT accepted
-    ✗  "منصور" alone does NOT trigger even though it's a substring of a longer keyword
-
-    Implementation detail
-    ─────────────────────
-    Python's `in` operator on strings performs substring matching, which is exactly
-    what "exact phrase" means for multi-word Arabic phrases — it checks that the
-    *complete* configured keyword phrase occurs somewhere inside the text.
-    Single-word keywords in the list (e.g. "حاكم", "زايد") are intentionally
-    included as configured by the product owner and will match whenever that exact
-    word appears in the text.
+    ⚠️  Matching is on TITLE ONLY (not content).
+    Reason: content can mention a keyword incidentally (e.g. "الإمارات" appearing
+    in a sports article about a Gulf tournament hosted abroad). The headline is
+    always the most reliable signal that the article is *about* that entity.
     """
-    search_text = _build_search_text(title, content)
+    normalised_title = _normalise(title)
 
     for keyword in INSTANT_PUBLISH_KEYWORDS:
         normalised_keyword = _normalise(keyword)
-        if normalised_keyword in search_text:
+        if normalised_keyword in normalised_title:
             logger.info(
                 f"🚨 PRIORITY MATCH | keyword='{keyword}' | title='{title[:80]}'"
             )
             return True
 
     return False
+
+
+def _claim_queue_row(queue_id: int) -> bool:
+    """
+    Atomically flip status pending → processing.
+    Returns True if this caller won the race, False if another caller got there first.
+    """
+    import psycopg2
+    import os
+
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    try:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE news_queue
+                SET status = 'processing', last_updated = NOW()
+                WHERE id = %s AND status = 'pending'
+                """,
+                (queue_id,),
+            )
+            claimed = cur.rowcount == 1
+        conn.commit()
+        return claimed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def instant_publish(
@@ -80,6 +102,15 @@ def instant_publish(
     """
     queue_id   = post["id"]
     title_snip = post.get("title", "")[:80]
+
+    # ── Atomically claim the row before doing anything ────────────────────────
+    # If the publishing_worker already picked this row (status='processing'),
+    # _claim_queue_row returns False and we abort — no double publish.
+    if not _claim_queue_row(queue_id):
+        logger.warning(
+            f"🚨 INSTANT PUBLISH SKIPPED — row already claimed | queue_id={queue_id}"
+        )
+        return
 
     logger.info(
         f"🚨 INSTANT PUBLISH START | queue_id={queue_id} | '{title_snip}'"
@@ -127,7 +158,7 @@ def instant_publish(
             published_at    = NOW(),
             last_updated    = NOW()
         WHERE id = %s
-          AND status != 'published'   -- idempotency guard: never double-update
+          AND status = 'processing'
         """,
         (telegram_status, facebook_status, queue_id),
     )
