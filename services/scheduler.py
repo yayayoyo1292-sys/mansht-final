@@ -47,8 +47,10 @@ def _publish_one(post: dict) -> None:
             status           = 'published',
             telegram_status  = %s,
             facebook_status  = %s,
-            published_at     = NOW()
+            published_at     = NOW(),
+            last_updated     = NOW()
         WHERE id = %s
+          AND status = 'processing'
         """,
         (telegram_status, facebook_status, post_id),
     )
