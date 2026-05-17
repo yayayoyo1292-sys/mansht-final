@@ -7,9 +7,56 @@ _OPEN_QUOTES  = set('"\u201c\u00ab')
 _CLOSE_QUOTES = set('"\u201d\u00bb')
 _ALL_QUOTES   = _OPEN_QUOTES | _CLOSE_QUOTES
 
+# ── Protected names ───────────────────────────────────────────────────────────
+# These multi-word Arabic names must NEVER be broken across lines.
+# Sorted longest-first so overlapping phrases match correctly.
+PROTECTED_NAMES: list = sorted([
+    "محمد بن راشد",
+    "منصور بن زايد",
+    "خالد بن محمد بن زايد",
+    "حمدان بن محمد",
+    "سيف بن زايد",
+    "عبدالله بن زايد",
+    "طحنون بن زايد",
+    "هزاع بن زايد",
+    "حمدان بن زايد",
+    "أحمد بن محمد بن راشد",
+    "سلطان القاسمي",
+    "عمر بن زايد",
+    "حميد بن راشد",
+    "سعود بن صقر",
+    "راشد بن سعود",
+    "حمد الشرقي",
+    "سلطان بن زايد",
+    "نهيان بن زايد",
+    "ذياب بن محمد بن زايد",
+    "حمدان بن محمد بن زايد",
+    "منصور بن محمد بن راشد",
+    "محمد بن زايد",
+    "رئيس الدولة",
+    "ولي عهد",
+], key=lambda s: -len(s))
+
+# Non-breaking space — glues words of a protected name into one token
+_NBSP = "\u00a0"
+
+
+def _protect_names(text: str) -> str:
+    """
+    Replace ordinary spaces inside protected names with non-breaking spaces
+    so the entire name stays on a single line during wrapping.
+
+        "هزاع بن زايد يقول"  →  "هزاع\\u00a0بن\\u00a0زايد يقول"
+    """
+    for name in PROTECTED_NAMES:
+        protected = name.replace(" ", _NBSP)
+        text = text.replace(name, protected)
+    return text
+
 
 def prepare_ar_text(text: str) -> str:
     """Reshape + apply BiDi algorithm so Arabic renders correctly in PIL."""
+    text = _protect_names(text)
     reshaped = arabic_reshaper.reshape(text)
     return str(get_display(reshaped))
 
