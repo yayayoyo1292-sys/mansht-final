@@ -1,7 +1,6 @@
 import time
 import traceback
 from datetime import datetime
-
 from DB.db import db_execute
 from ML.ai import classify_news
 from services.date_filter import is_within_range
@@ -45,6 +44,19 @@ def save_news(
                 category = "عام"
 
             # ── Insert into news table ────────────────────────────────────────
+            # Pre-check both unique constraints (url AND title) before inserting.
+            # A story can reappear with a slightly different URL but same title
+            # (e.g. cache-busted URLs on mnsht.net), which would pass the url
+            # dedup in extractor.py but crash on the title constraint.
+            already_exists = db_execute(
+                "SELECT id FROM news WHERE url = %s OR title = %s LIMIT 1",
+                (item["url"], item["title"]),
+                fetch=True,
+            )
+            if already_exists:
+                logger.warning(f"⚠️ Article already exists (url or title): {item['title'][:60]}")
+                continue
+
             result = db_execute(
                 """
                 INSERT INTO news (title, url, image, category, confidence, content)
