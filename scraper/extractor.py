@@ -2,11 +2,9 @@ import re
 import unicodedata
 from typing import Optional
 from urllib.parse import urljoin
-
 import requests
 from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_fixed
-
 from DB.db import db_execute
 from utils.logger import logger
 
@@ -34,12 +32,20 @@ def clean_image_url(src: Optional[str]) -> Optional[str]:
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
-def news_exists(url: str) -> bool:
-    result = db_execute(
-        "SELECT id FROM news WHERE url = %s",
-        (url,),
-        fetch=True,
-    )
+def news_exists(url: str, title: Optional[str] = None) -> bool:
+    """Return True if an article with this URL *or* title already exists in DB."""
+    if title:
+        result = db_execute(
+            "SELECT id FROM news WHERE url = %s OR title = %s LIMIT 1",
+            (url, title),
+            fetch=True,
+        )
+    else:
+        result = db_execute(
+            "SELECT id FROM news WHERE url = %s LIMIT 1",
+            (url,),
+            fetch=True,
+        )
     return bool(result)
 
 
@@ -104,11 +110,12 @@ def extract_news(html: str, limit: int = 5) -> list[dict]:
             if not url or url == BASE_URL:
                 continue
 
-            if news_exists(url):
-                continue
-
+            # Extract title first so we can dedup on both url AND title
             h3    = card.find("h3")
-            title = h3.get_text(strip=True) if h3 else "بدون عنوان"
+            title = clean_text(h3.get_text(strip=True)) if h3 else "بدون عنوان"
+
+            if news_exists(url, title):
+                continue
 
             img_tag     = card.find("img")
             raw_img_src: Optional[str] = None
