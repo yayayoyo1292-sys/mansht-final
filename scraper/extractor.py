@@ -77,7 +77,7 @@ def fetch_article_content(url: str, max_words: int = 100) -> Optional[str]:
         chunk       = " ".join(words[:max_words])
         cutoff      = " ".join(words[:45])
         search_area = chunk[len(cutoff):]
-        dot_idx     = search_area.find("."or ","or "؟"or "!"or "…")
+        dot_idx     = search_area.find(".")
         content     = cutoff + search_area[: dot_idx + 1] if dot_idx != -1 else chunk
 
         return content if content else None
