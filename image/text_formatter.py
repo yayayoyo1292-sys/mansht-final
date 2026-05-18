@@ -74,7 +74,7 @@ def prepare_ar_text(text: str) -> str:
     return str(get_display(reshaped))
 
 
-def _tokenize(text: str) -> list[str]:
+def _tokenize(text: str) -> list:
     """
     Split text into tokens where a quoted phrase counts as ONE token.
 
@@ -116,47 +116,157 @@ def _tokenize(text: str) -> list[str]:
     return [t for t in tokens if t]
 
 
-def wrap_text(draw, text: str, font, max_width: int) -> list[str]:
+def _fix_orphans(lines: list) -> list:
     """
-    Wrap *text* into lines that fit within *max_width* pixels.
+    Final pass: merge any single-token line with its neighbour.
 
-    Rules:
-    • Quoted phrases stay on one line (never broken).
-    • Protected names (joined with NBSP) stay on one line.
-    • Orphan prevention: if the first line has only ONE token, it is merged
-      with the second line so a name like "أبو الغيط" never splits as
-      "أبو" alone on line 1.
+    Rules (applied repeatedly until stable):
+    • If line[0] has 1 token → merge with line[1]
+    • If line[-1] has 1 token → merge with line[-2]
+
+    We allow the merged line to exceed max_width — better to be slightly
+    wide than to have a lone word on its own line.
     """
-    tokens = _tokenize(text)
-    lines: list[str] = []
-    current = ""
+    changed = True
+    while changed and len(lines) > 1:
+        changed = False
+        # Fix orphan first line
+        if len(lines) > 1:
+            first_words = [w for w in lines[0].replace(_NBSP, " ").split() if w]
+            if len(first_words) == 1:
+                lines = [lines[0] + " " + lines[1]] + lines[2:]
+                changed = True
+                continue
+        # Fix orphan last line
+        if len(lines) > 1:
+            last_words = [w for w in lines[-1].replace(_NBSP, " ").split() if w]
+            if len(last_words) == 1:
+                lines = lines[:-2] + [lines[-2] + " " + lines[-1]]
+                changed = True
+    return lines
 
-    for token in tokens:
-        candidate = (current + " " + token).strip() if current else token
-        bbox  = draw.textbbox((0, 0), candidate, font=font)
-        width = bbox[2] - bbox[0]
 
-        if width <= max_width:
+def _line_width(draw, tokens: list, font) -> int:
+    """Pixel width of tokens joined by spaces."""
+    text = " ".join(tokens)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0]
+
+
+def _greedy_wrap(draw, tokens: list, font, max_width: int) -> list:
+    """
+    Classic greedy wrap — fill each line to max_width then break.
+    Returns list of token-lists (one per line).
+    """
+    lines = []
+    current = []
+    for tok in tokens:
+        candidate = current + [tok]
+        if _line_width(draw, candidate, font) <= max_width:
             current = candidate
         else:
             if current:
                 lines.append(current)
-            current = token          # start fresh line with this token
-
+            current = [tok]
     if current:
         lines.append(current)
+    return lines
 
-    # ── Orphan prevention ────────────────────────────────────────────────────
-    # If the first line is a single short token (≤ 6 chars) AND there's a
-    # second line, merge them. This keeps "أبو الغيط" together even when the
-    # wrapping algorithm would otherwise leave "أبو" alone on line 1.
-    if len(lines) >= 2:
-        first_tokens = _tokenize(lines[0])
-        if len(first_tokens) == 1 and len(lines[0].replace(_NBSP, "")) <= 8:
-            merged = lines[0] + " " + lines[1]
-            lines = [merged] + lines[2:]
+
+def _balanced_wrap(draw, tokens: list, font, max_width: int, n_lines: int) -> list:
+    """
+    Distribute *tokens* across exactly *n_lines* as evenly as possible
+    (minimise the difference in pixel width between lines).
+
+    Algorithm: dynamic programming — find the split points that minimise
+    the maximum line width while respecting max_width per line.
+
+    This guarantees that if the text fits in n_lines, every line will be
+    as close to the same width as possible — no single short word left
+    alone on a line when the line could hold more tokens.
+    """
+    n = len(tokens)
+
+    # Pre-compute widths of every possible span [i, j)
+    width = {}
+    for i in range(n):
+        w = 0
+        for j in range(i, n):
+            tok_w = draw.textbbox((0, 0), tokens[j], font=font)[2] - \
+                    draw.textbbox((0, 0), tokens[j], font=font)[0]
+            space_w = draw.textbbox((0, 0), " ", font=font)[2] - \
+                      draw.textbbox((0, 0), " ", font=font)[0] if j > i else 0
+            w += tok_w + space_w
+            width[(i, j)] = w
+
+    INF = float("inf")
+
+    # dp[i][k] = minimum "max-line-width" to place tokens[i:] in k lines
+    # We also store the split point for reconstruction
+    dp   = [[INF] * (n_lines + 1) for _ in range(n + 1)]
+    split = [[0]  * (n_lines + 1) for _ in range(n + 1)]
+    dp[n][0] = 0
+
+    for i in range(n - 1, -1, -1):
+        for k in range(1, n_lines + 1):
+            for j in range(i, n):
+                w = width[(i, j)]
+                if w > max_width:
+                    break   # this span is already too wide — stop extending
+                cost = max(w, dp[j + 1][k - 1])
+                if cost < dp[i][k]:
+                    dp[i][k]   = cost
+                    split[i][k] = j + 1
+
+    # Reconstruct lines
+    lines = []
+    i, k = 0, n_lines
+    while k > 0 and i < n:
+        j = split[i][k]
+        lines.append(tokens[i:j])
+        i, k = j, k - 1
+
+    # If DP couldn't fill all n_lines (edge case), fall back to greedy
+    if not lines:
+        lines = _greedy_wrap(draw, tokens, font, max_width)
 
     return lines
+
+
+def wrap_text(draw, text: str, font, max_width: int) -> list:
+    """
+    Wrap *text* into lines that fit within *max_width* pixels.
+
+    Strategy
+    ────────
+    1. Tokenise (quoted phrases & NBSP-protected names = single tokens).
+    2. Greedy-wrap to find the minimum number of lines needed (n_lines).
+    3. Re-wrap using the balanced algorithm so that all n_lines carry
+       roughly equal pixel weight — no orphan first/last lines.
+
+    This means a 12-word headline that needs 3 lines gets ~4 words per
+    line, not "1 word / 5 words / 6 words".
+    """
+    tokens = _tokenize(text)
+    if not tokens:
+        return []
+
+    # Step 1 — find minimum line count via greedy
+    greedy_lines = _greedy_wrap(draw, tokens, font, max_width)
+    n_lines = len(greedy_lines)
+
+    if n_lines <= 1:
+        return [" ".join(tokens)]
+
+    # Step 2 — balanced redistribution
+    balanced = _balanced_wrap(draw, tokens, font, max_width, n_lines)
+
+    # Convert token-lists → strings
+    result = [" ".join(toks) for toks in balanced if toks]
+    result = result if result else [" ".join(tokens)]
+
+    # Final pass: fix any remaining single-word lines
+    return _fix_orphans(result)
 
 
 def fit_text(
