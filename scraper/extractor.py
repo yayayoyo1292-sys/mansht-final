@@ -75,7 +75,7 @@ def fetch_article_content(url: str, max_words: int = 150) -> Optional[str]:
 
         # Cut at the nearest sentence-end after word 45
         chunk       = " ".join(words[:max_words])
-        cutoff      = " ".join(words[:45])
+        cutoff      = " ".join(words[:30])
         search_area = chunk[len(cutoff):]
         dot_idx     = search_area.find("."or ","or "؟"or "!"or "…")
         content     = cutoff + search_area[: dot_idx + 1] if dot_idx != -1 else chunk
