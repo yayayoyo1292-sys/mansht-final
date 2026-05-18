@@ -59,7 +59,7 @@ def get_html() -> str:
     return response.text
 
 
-def fetch_article_content(url: str, max_words: int = 100) -> Optional[str]:
+def fetch_article_content(url: str, max_words: int = 150) -> Optional[str]:
     """Fetch and trim article body text."""
     try:
         response = session.get(url, timeout=15)
@@ -77,7 +77,7 @@ def fetch_article_content(url: str, max_words: int = 100) -> Optional[str]:
         chunk       = " ".join(words[:max_words])
         cutoff      = " ".join(words[:45])
         search_area = chunk[len(cutoff):]
-        dot_idx     = search_area.find(".")
+        dot_idx     = search_area.find("."or ","or "؟"or "!"or "…")
         content     = cutoff + search_area[: dot_idx + 1] if dot_idx != -1 else chunk
 
         return content if content else None
